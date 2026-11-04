@@ -1,0 +1,14 @@
+# Локальные данные и настройки
+/config.toml
+/content_dir/
+/catalog.json
+/catalog-source.json
+/packages/
+
+# Результаты сборки и зависимости
+/bin/
+/web/node_modules/
+/web/dist/
+
+# Служебные файлы ОС
+.DS_Store
