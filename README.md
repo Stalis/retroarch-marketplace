@@ -1,56 +1,59 @@
 # RetroArch Content Catalog
 
-Локальный сервер каталога по [протоколу](CONTENT_CATALOG_PROTOCOL.md) и встроенного RetroArch Content Downloader. Требуется Go. Сервер не создаёт и не скачивает игровые данные.
+This project was originally built to develop a custom marketplace protocol for RetroArch. It also supports RetroArch's standard **Content Downloader** asset-server protocol, so the same catalog can be browsed from a stock RetroArch installation.
+
+- **Custom marketplace:** JSON catalog and lazy ZIP downloads; requires a compatible client. See [the protocol notes](CONTENT_CATALOG_PROTOCOL.md).
+- **Standard RetroArch:** browse and download games through Online Updater → Content Downloader.
+- **Web admin:** add platforms and games, edit the manifest, and choose English or Russian.
+
+The server uses your local files. It does not provide, create, or download game data.
+
+> **Disclaimer:** This project is an independent personal initiative and is not affiliated with, endorsed by, or in any way officially connected with RetroArch or the Libretro team. It does not aim to compete or conflict with RetroArch in any way.
+
+## Quick start
+
+**Requirements:** Go 1.22+, Git, Node.js 20.19+ or 22.12+, and npm. Node.js and npm are only needed for the web admin.
 
 ```sh
-go run .
-# Необязательно: go run . -listen 127.0.0.1:5050 -catalog catalog-source.json -packages packages
-```
+git clone https://github.com/Stalis/retroarch-marketplace.git
+cd retroarch-marketplace
 
-Для разработки доступны `make run`, `make build`, `make test`, `make e2e`, `make vet` и `make fmt`. Флаги сервера можно передать через `ARGS`, например `make run ARGS="-listen 127.0.0.1:5051"`. `make build` создаёт `bin/catalog-server`.
+# Create an empty manifest on a fresh checkout; do not overwrite an existing one.
+test ! -e catalog-source.json && test ! -L catalog-source.json && \
+  printf '{"platforms":[],"contents":[]}\n' > catalog-source.json
 
-`-catalog` — исходный доменный манифест; `-packages` — директория кеша. Сервер проверяет манифест и исходные файлы при запуске, но не создаёт ZIP до запроса на скачивание. Первая загрузка собирает архив, последующие используют кеш в `packages/.cache/`. Имеющиеся файлы `packages/<id>.zip` сервер не меняет и не использует.
-
-Манифест и размер/`mtime` каждого исходного файла проверяются при запросах и дополнительно фоново каждые 10 минут. Изменения инвалидируют кеш и приводят к созданию нового архива при следующем скачивании. Контрольные суммы не вычисляются: изменение файла с сохранёнными размером и временем модификации не обнаруживается; в этом случае измените манифест. При некорректном манифесте запросы возвращают ошибку, а не устаревший каталог. Не изменяйте исходные файлы во время скачивания.
-
-Раз в час фоновая задача удаляет из `packages/.cache/` только собственные ZIP старше 24 часов по времени модификации. Скачиваемые архивы, исходники, другие файлы и `packages/<id>.zip` не удаляются. Возраст отсчитывается от создания ZIP, а не последнего скачивания; архив будет создан заново по запросу.
-
-По умолчанию каталог доступен по `http://127.0.0.1:5050/api/games`. Внешний доступ возможен только при явном изменении `-listen`; аутентификации нет. `GET /api/games?q=example` ищет подстроку без учёта регистра Unicode в `canonical_name` и `display_name`; пустой `q` возвращает все карточки, повторный `q` игнорируется. Полученный `download_url` разрешается относительно адреса каталога, например `/api/packages/example.zip`.
-
-## Конфигурация
-
-Необязательный `config.toml` читается из текущей директории; пример — `config.example.toml`. Другой путь задаётся через `-config` или `RETRO_CONFIG`; явно указанный отсутствующий файл считается ошибкой. Приоритет: флаг CLI → переменная окружения → TOML → значение по умолчанию.
-
-| TOML | Переменная окружения | Флаг | По умолчанию |
-|---|---|---|---|
-| `listen` | `RETRO_LISTEN` | `-listen` | `127.0.0.1:5050` |
-| `catalog` | `RETRO_CATALOG` | `-catalog` | `catalog-source.json` |
-| `packages` | `RETRO_PACKAGES` | `-packages` | `packages` |
-| `scan_interval` | `RETRO_SCAN_INTERVAL` | `-scan-interval` | `10m` |
-| `cleanup_interval` | `RETRO_CLEANUP_INTERVAL` | `-cleanup-interval` | `1h` |
-| `cache_max_age` | `RETRO_CACHE_MAX_AGE` | `-cache-max-age` | `24h` |
-
-Интервалы задаются положительными строками длительности Go, например `30s`, `10m` или `24h`. Неизвестные поля TOML и некорректные значения блокируют запуск.
-
-## Админка
-
-Для сборки интерфейса нужны Node.js 20.19+ или 22.12+ и npm. Из корня проекта:
-
-```sh
 make admin-install
 make admin-build
 make run
 ```
 
-Откройте `http://127.0.0.1:5050/admin/`. Можно изменить Canonical Name в карточке или любые поля в полном JSON. При загрузке JSON форматируется для просмотра без записи на диск; сохранение проверяет манифест и ссылки на файлы, затем атомарно заменяет исходный файл. При параллельном изменении манифеста сервер отклоняет устаревшее сохранение: скопируйте свои изменения и загрузите актуальную версию. Символическая ссылка на сам файл манифеста для записи не поддерживается.
+Open **http://127.0.0.1:5050/admin/**. Add a platform and a game, then click **Save**. Source file paths are relative to the manifest directory. The catalog is available at **http://127.0.0.1:5050/api/games**; an empty catalog returns `[]`.
 
-Админка и её API доступны только с loopback-адреса и не имеют отдельной аутентификации: им могут пользоваться локальные процессы. Даже при внешнем `-listen` удалённое администрирование запрещено. Запускайте сервер из корня проекта, чтобы он нашёл собранный `web/dist`.
+> **Security:** The server listens on loopback by default and has no authentication. Exposing it to a network makes the catalog and game downloads available to others. The admin interface and API are restricted to loopback clients, but local processes can use them without authentication.
 
-Для разработки интерфейса запустите сервер на стандартном `127.0.0.1:5050`, затем отдельно `make admin-dev` и откройте указанный Vite адрес с путём `/admin/`. `make admin-test` запускает тесты интерфейса.
+## Use with RetroArch
 
-## Исходный манифест
+Set the asset-server URL in `retroarch.cfg`:
 
-В отдельной директории создайте собственные текстовые данные и `source.json`:
+```ini
+core_updater_buildbot_assets_url = "http://127.0.0.1:5050/assets/"
+```
+
+In RetroArch, open **Online Updater → Content Downloader**. If RetroArch runs on another device, replace `127.0.0.1` with the server's reachable address and explicitly set `-listen`, for example:
+
+```sh
+make run ARGS="-listen 0.0.0.0:5050"
+```
+
+This server implements Content Downloader, not every resource on the standard buildbot. Other updates that use the same asset URL may stop working until the original setting is restored. Extracted content location depends on RetroArch's settings and version; downloads are not automatically added to a playlist.
+
+## Managing content
+
+The admin supports predefined Libretro platform names and custom platforms. To add a game, enter its ID, title, platform, and one or more discs. For each disc, enter its package-relative entrypoint and the source and package paths for its files. Multiple discs require a playlist path; the server generates the M3U. CUE and other source files are copied unchanged; CUE files are not generated.
+
+Changes remain in the editor until **Save**. The server validates the manifest and files before atomically replacing the manifest. If a file or parent directory is missing, you can return to editing or explicitly save the game with `defer_missing: true`. Such a game stays out of the public catalog until its files appear; other games remain available. Invalid paths and other validation errors cannot be bypassed. Concurrent manifest edits are rejected rather than overwritten.
+
+You can also edit the manifest manually or ask an agent to use the [`build-content-manifest` skill](.agents/skills/build-content-manifest/SKILL.md). This example runs from the project root and creates `source.json` and `example/game.txt`; do not run it if those paths contain files you want to keep.
 
 ```sh
 mkdir -p example
@@ -69,27 +72,44 @@ cat > source.json <<'JSON'
   }]
 }
 JSON
+
+go run . -catalog source.json
 ```
 
-Из корня проекта запустите `go run . -catalog /путь/source.json -packages /путь/packages`. Платформы задаются один раз; контент ссылается на них через `platform_id`. Пути `source` относительны к директории манифеста, `path` и `entrypoint` — к корню ZIP; пути разделяются `/`. Для нескольких дисков обязательно поле `playlist`, например `"playlist": "game.m3u"`: сервер сгенерирует M3U со ссылками на `entrypoint` дисков в заданном порядке. Для одного диска `playlist` необязателен. CUE и прочие файлы копируются без изменений; CUE не генерируются. Локальный `catalog-source.json` описывает шесть игр и исключён из Git.
+`source` is relative to the manifest directory; `path`, `entrypoint`, and `playlist` are relative to the ZIP root. Paths use `/` and must be safe relative paths. Define each platform once and refer to it by `platform_id`. The preset platform list is a snapshot from [libretro-database](https://github.com/libretro/libretro-database/tree/master/rdb), not a list of installed cores.
 
-## RetroArch Content Downloader
+## Configuration
 
-Укажите в `retroarch.cfg`:
+The optional `config.toml` is read from the current directory. Copy `config.example.toml` to get started, or choose a file with `-config` or `RETRO_CONFIG`. An explicitly specified missing file is an error. Precedence: **CLI flag → environment variable → TOML → default**.
 
-```ini
-core_updater_buildbot_assets_url = "http://127.0.0.1:5050/assets/"
-```
+| TOML | Environment variable | Flag | Default |
+|---|---|---|---|
+| `listen` | `RETRO_LISTEN` | `-listen` | `127.0.0.1:5050` |
+| `catalog` | `RETRO_CATALOG` | `-catalog` | `catalog-source.json` |
+| `packages` | `RETRO_PACKAGES` | `-packages` | `packages` |
+| `scan_interval` | `RETRO_SCAN_INTERVAL` | `-scan-interval` | `10m` |
+| `cleanup_interval` | `RETRO_CLEANUP_INTERVAL` | `-cleanup-interval` | `1h` |
+| `cache_max_age` | `RETRO_CACHE_MAX_AGE` | `-cache-max-age` | `24h` |
 
-Откройте **Online Updater → Content Downloader**. Если RetroArch работает на другом устройстве, укажите адрес сервера и настройте `-listen`. Этот сервер не поддерживает остальные ресурсы стандартного buildbot: обновления, использующие тот же базовый URL, могут перестать работать до восстановления исходного значения.
+Intervals are positive Go duration strings, such as `30s`, `10m`, and `24h`. Unknown TOML fields and invalid values prevent startup. Start the server from the project root so it can find the built `web/dist`; the admin is unavailable remotely even with an external `-listen`.
 
-`/assets/cores/.index-dirs` перечисляет платформы, `/assets/cores/<платформа>/.index` — ZIP-файлы игр. При скачивании файлы упаковываются в директорию игры, чтобы исключить конфликты; CUE и M3U остаются без изменений. Необычные и конфликтующие без учёта регистра имена кодируются в индексах. Расположение извлечённого контента зависит от настроек и версии RetroArch; автоматическое добавление в плейлист не выполняется.
+## ZIP cache
 
-## Проверка
+ZIPs are built on the first download and reused from `packages/.cache/`. The manifest and each source file's size and `mtime` are checked on requests and periodically; changes invalidate the cache. Checksums are not calculated, so edits preserving both size and `mtime` require a manifest change. Do not modify files during a download.
+
+By default, a background task removes generated cache ZIPs older than 24 hours every hour. Age is based on ZIP modification time, not last use. Active downloads, source files, other files, and existing `packages/<id>.zip` are not deleted. Cache paths and intervals are configurable above.
+
+## Development
 
 ```sh
-go test ./...                            # все тесты, включая E2E
-go test -count=1 -run '^TestE2E$' -v .  # только E2E без кэша Go
+make test         # Go tests, including E2E
+make e2e          # E2E without the Go test cache
+make admin-test   # frontend tests
+make vet
+make fmt
+make build        # bin/catalog-server
 ```
 
-E2E запускает сервер и использует временные текстовые файлы: проверяет поиск, скачивание, генерацию M3U, повторное использование кеша и инвалидирование при изменении манифеста. Игровые данные и Python не требуются. Установка в RetroArch не проверяется.
+For frontend development, run the backend at `127.0.0.1:5050`, then run `make admin-dev` separately and open the displayed `/admin/` URL. `ARGS` passes flags to `make run`.
+
+E2E uses temporary text files; game data and Python are not required. Actual installation in RetroArch is not covered by the tests.
