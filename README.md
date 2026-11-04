@@ -53,7 +53,25 @@ The admin supports predefined Libretro platform names and custom platforms. To a
 
 Changes remain in the editor until **Save**. The server validates the manifest and files before atomically replacing the manifest. If a file or parent directory is missing, you can return to editing or explicitly save the game with `defer_missing: true`. Such a game stays out of the public catalog until its files appear; other games remain available. Invalid paths and other validation errors cannot be bypassed. Concurrent manifest edits are rejected rather than overwritten.
 
-You can also edit the manifest manually or ask an agent to use the [`build-content-manifest` skill](.agents/skills/build-content-manifest/SKILL.md). This example runs from the project root and creates `source.json` and `example/game.txt`; do not run it if those paths contain files you want to keep.
+### Populating the manifest with an AI agent (Skill)
+
+If you have existing game dumps (e.g. CUE/BIN, ISO, CCD/IMG/SUB, or multi-disc folders with M3U), you can instruct an AI assistant to automatically discover and construct `catalog-source.json` using the project's agent skill:
+
+- **Skill location:** [`.agents/skills/build-content-manifest`](.agents/skills/build-content-manifest/SKILL.md)
+
+**Example prompt for your AI assistant:**
+> "Populate `catalog-source.json` from my games in `/path/to/games` using the `build-content-manifest` skill."
+
+**What the skill does:**
+- Analyzes game directories, disc entrypoints, and file sets without altering source files.
+- Verifies internal CUE and M3U references, matching exact filenames and case.
+- Assigns standardized Libretro platform identifiers (e.g. `Sony - PlayStation`).
+- Validates the resulting manifest against a temporary server instance before saving.
+- Flags missing files and offers to mark them as deferred (`defer_missing: true`).
+
+### Manual manifest creation
+
+You can also create or edit the manifest manually. This example runs from the project root and creates `source.json` and `example/game.txt`; do not run it if those paths contain files you want to keep.
 
 ```sh
 mkdir -p example
