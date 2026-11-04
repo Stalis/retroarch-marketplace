@@ -1,4 +1,4 @@
-.PHONY: run build test e2e vet fmt admin-install admin-build admin-dev admin-test
+.PHONY: run build test e2e vet fmt admin-install admin-build admin-dev admin-dev-mock admin-mock admin-test
 
 run:
 	go run . $(ARGS)
@@ -27,6 +27,12 @@ admin-build:
 
 admin-dev:
 	npm run dev --prefix web
+
+admin-dev-mock:
+	npm run dev:mock --prefix web
+
+admin-mock:
+	npm run mock --prefix web
 
 admin-test:
 	npm test --prefix web

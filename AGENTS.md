@@ -31,6 +31,7 @@ This repository contains a local content catalog and asset server for RetroArch,
 │   │   ├── platforms.js          # Predefined Libretro platform catalog (82 platforms)
 │   │   ├── i18n.js               # UI translations (Russian default, English)
 │   │   └── validation-i18n.js    # Localized validation error messages
+│   ├── mock-backend.js       # In-memory mock admin backend & Vite middleware
 │   ├── package.json
 │   └── vite.config.js
 ├── .agents/skills/               # Agent skills
@@ -96,6 +97,8 @@ make admin-install    # Install web dependencies (npm ci --prefix web)
 make admin-build      # Build web production bundle (Vite -> web/dist)
 make admin-dev        # Run Vite dev server with proxy to 127.0.0.1:5050
 make admin-test       # Run Node.js frontend tests (node --test)
+make admin-dev-mock   # Vite dev server with integrated mock backend (standalone)
+make admin-mock       # Standalone Node.js mock admin server
 ```
 
 ### Making Changes: Rules & Invariants

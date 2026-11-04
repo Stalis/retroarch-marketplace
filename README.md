@@ -110,6 +110,14 @@ make fmt
 make build        # bin/catalog-server
 ```
 
-For frontend development, run the backend at `127.0.0.1:5050`, then run `make admin-dev` separately and open the displayed `/admin/` URL. `ARGS` passes flags to `make run`.
+For frontend development against a live server, run `make run` at `127.0.0.1:5050`, then run `make admin-dev` separately.
+
+To develop, test, or redesign the web interface independently without running the Go backend, start the mock development server:
+
+```sh
+make admin-dev-mock   # Vite dev server with built-in mock backend (http://127.0.0.1:5173/admin/)
+```
+
+Alternatively, run `make admin-mock` to launch the standalone mock server on `http://127.0.0.1:5050`. `ARGS` passes flags to `make run`.
 
 E2E uses temporary text files; game data and Python are not required. Actual installation in RetroArch is not covered by the tests.

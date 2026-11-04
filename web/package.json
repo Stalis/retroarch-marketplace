@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:mock": "vite --mode mock",
+    "mock": "node mock-backend.js",
     "build": "vite build",
     "test": "node --test"
   },
