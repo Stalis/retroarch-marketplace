@@ -3,6 +3,7 @@ package catalog
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"io"
 	"mime"
@@ -35,6 +36,88 @@ func localAdmin(r *http.Request) bool {
 
 func manifestETag(data []byte) string {
 	return fmt.Sprintf("\"%x\"", sha256.Sum256(data))
+}
+
+// markDeferred edits only the effective contents array, preserving other JSON values and key order.
+func markDeferred(candidate []byte, affected map[string]bool) ([]byte, error) {
+	decoder := json.NewDecoder(bytes.NewReader(candidate))
+	if _, err := decoder.Token(); err != nil {
+		return nil, err
+	}
+	start, end := -1, -1
+	var contents []json.RawMessage
+	for decoder.More() {
+		key, err := decoder.Token()
+		if err != nil {
+			return nil, err
+		}
+		var raw json.RawMessage
+		if err := decoder.Decode(&raw); err != nil {
+			return nil, err
+		}
+		if strings.EqualFold(key.(string), "contents") {
+			end = int(decoder.InputOffset())
+			start = end - len(raw)
+			if err := json.Unmarshal(raw, &contents); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if start < 0 {
+		return nil, fmt.Errorf("missing contents")
+	}
+	for i, raw := range contents {
+		var game struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(raw, &game); err != nil {
+			return nil, err
+		}
+		if !affected[game.ID] {
+			continue
+		}
+		d := json.NewDecoder(bytes.NewReader(raw))
+		if _, err := d.Token(); err != nil {
+			return nil, err
+		}
+		var edited bytes.Buffer
+		last := 0
+		found := false
+		for d.More() {
+			key, err := d.Token()
+			if err != nil {
+				return nil, err
+			}
+			var value json.RawMessage
+			if err := d.Decode(&value); err != nil {
+				return nil, err
+			}
+			if strings.EqualFold(key.(string), "defer_missing") {
+				valueEnd := int(d.InputOffset())
+				valueStart := valueEnd - len(value)
+				edited.Write(raw[last:valueStart])
+				edited.WriteString("true")
+				last = valueEnd
+				found = true
+			}
+		}
+		if found {
+			edited.Write(raw[last:])
+		} else {
+			edited.Write(raw[:len(raw)-1])
+			edited.WriteString(`,"defer_missing":true}`)
+		}
+		contents[i] = edited.Bytes()
+	}
+	encoded, err := json.Marshal(contents)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]byte, 0, len(candidate)-(end-start)+len(encoded))
+	result = append(result, candidate[:start]...)
+	result = append(result, encoded...)
+	result = append(result, candidate[end:]...)
+	return result, nil
 }
 
 func (s *Server) serveAdmin(w http.ResponseWriter, r *http.Request) {
@@ -114,6 +197,60 @@ func (s *Server) serveAdmin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "cannot write temporary manifest: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	items, _, err := content.Inspect(name)
+	if err != nil {
+		http.Error(w, "invalid manifest: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	approved := make(map[content.MissingSource]bool)
+	if previous, _, inspectErr := content.Inspect(s.catalogPath); inspectErr == nil {
+		for _, item := range previous {
+			if item.DeferMissing {
+				for _, missing := range item.Missing {
+					approved[missing] = true
+				}
+			}
+		}
+	}
+	var missing []content.MissingSource
+	affected := make(map[string]bool)
+	for _, item := range items {
+		for _, source := range item.Missing {
+			if !item.DeferMissing || !approved[source] {
+				missing = append(missing, source)
+				affected[item.ID] = true
+			}
+		}
+	}
+	changed := len(missing) > 0 && r.URL.Query().Get("allow_missing") == "1"
+	if len(missing) > 0 && !changed {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_ = json.NewEncoder(w).Encode(struct {
+			Missing []content.MissingSource `json:"missing"`
+		}{missing})
+		return
+	}
+	if changed {
+		candidate, err = markDeferred(candidate, affected)
+		if err == nil {
+			var updated *os.File
+			updated, err = os.OpenFile(name, os.O_WRONLY|os.O_TRUNC, 0)
+			if err == nil {
+				_, err = updated.Write(candidate)
+				if err == nil {
+					err = updated.Sync()
+				}
+				if closeErr := updated.Close(); err == nil {
+					err = closeErr
+				}
+			}
+		}
+		if err != nil {
+			http.Error(w, "cannot prepare manifest: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
 	if _, _, err = content.Load(name); err != nil {
 		http.Error(w, "invalid manifest: "+err.Error(), http.StatusBadRequest)
 		return
@@ -133,6 +270,12 @@ func (s *Server) serveAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("ETag", manifestETag(candidate))
+	if changed {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(candidate)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

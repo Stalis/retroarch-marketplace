@@ -423,4 +423,93 @@ func TestE2E(t *testing.T) {
 			t.Fatalf("recent cached ZIP was deleted: %v", err)
 		}
 	})
+	t.Run("deferred game becomes available", func(t *testing.T) {
+		target := "http://" + address + "/api/admin/manifest"
+		r, err := client.Get(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		revision := r.Header.Get("ETag")
+		var source map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&source); err != nil {
+			r.Body.Close()
+			t.Fatal(err)
+		}
+		r.Body.Close()
+		entry := map[string]any{"id": "later", "canonical_name": "Later Game", "platform_id": "ps", "discs": []any{map[string]any{"entrypoint": "game.txt", "files": []any{map[string]any{"source": "later/game.txt", "path": "game.txt"}}}}}
+		source["contents"] = append(source["contents"].([]any), entry)
+		candidate, err := json.Marshal(source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		put := func(suffix string) (*http.Response, []byte) {
+			t.Helper()
+			req, err := http.NewRequest(http.MethodPut, target+suffix, bytes.NewReader(candidate))
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("If-Match", revision)
+			req.Header.Set("Origin", "http://"+address)
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, err := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			return resp, body
+		}
+		rejected, body := put("")
+		if rejected.StatusCode != http.StatusUnprocessableEntity || !bytes.Contains(body, []byte("later/game.txt")) {
+			t.Fatalf("missing file warning: %d %s", rejected.StatusCode, body)
+		}
+		original, err := os.ReadFile(filepath.Join(dir, "source.json"))
+		if err != nil || bytes.Contains(original, []byte("Later Game")) {
+			t.Fatalf("warning changed manifest: %v", err)
+		}
+		forced, body := put("?allow_missing=1")
+		if forced.StatusCode != http.StatusOK || !bytes.Contains(body, []byte("defer_missing")) {
+			t.Fatalf("confirmed save: %d %s", forced.StatusCode, body)
+		}
+		if len(getCards("q=later")) != 0 || len(getCards("q=other")) != 1 {
+			t.Fatal("pending game exposed or existing game unavailable")
+		}
+		if err := os.Mkdir(filepath.Join(dir, "later"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "later", "game.txt"), []byte("arrived"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if found := getCards("q=later"); len(found) != 1 || found[0].ID != "later" {
+			t.Fatalf("pending game did not activate: %+v", found)
+		}
+		download, err := client.Get("http://" + address + "/api/packages/later.zip")
+		if err != nil {
+			t.Fatal(err)
+		}
+		archive, err := io.ReadAll(download.Body)
+		download.Body.Close()
+		if err != nil || download.StatusCode != http.StatusOK {
+			t.Fatalf("download activated game: %d %v", download.StatusCode, err)
+		}
+		z, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(z.File) != 1 || z.File[0].Name != "game.txt" {
+			t.Fatalf("activated archive members: %v", z.File)
+		}
+		f, err := z.File[0].Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := io.ReadAll(f)
+		f.Close()
+		if err != nil || string(data) != "arrived" {
+			t.Fatalf("activated archive: %q %v", data, err)
+		}
+	})
 }

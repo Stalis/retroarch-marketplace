@@ -38,6 +38,7 @@ type content struct {
 	PlatformID    string  `json:"platform_id"`
 	Discs         []disc  `json:"discs"`
 	Playlist      *string `json:"playlist,omitempty"`
+	DeferMissing  bool    `json:"defer_missing,omitempty"`
 }
 
 type manifest struct {
@@ -55,12 +56,20 @@ type card struct {
 	DownloadURL   string   `json:"download_url"`
 }
 
+type MissingSource struct {
+	ID   string `json:"id"`
+	Path string `json:"path"`
+}
+
 type Item struct {
-	ID       string
-	Card     json.RawMessage
-	card     card
-	files    []sourceFile
-	playlist string
+	ID           string
+	Card         json.RawMessage
+	Available    bool
+	DeferMissing bool
+	Missing      []MissingSource
+	card         card
+	files        []sourceFile
+	playlist     string
 }
 
 func safePath(s string, component bool) bool {
@@ -126,6 +135,20 @@ func scanJSON(d *json.Decoder) error {
 }
 
 func Load(source string) ([]Item, string, error) {
+	items, fingerprint, err := Inspect(source)
+	if err != nil {
+		return nil, "", err
+	}
+	for _, item := range items {
+		if !item.DeferMissing && len(item.Missing) != 0 {
+			return nil, "", fmt.Errorf("source %q: %w", item.Missing[0].Path, os.ErrNotExist)
+		}
+	}
+	return items, fingerprint, nil
+}
+
+// Inspect validates the manifest and reports missing sources without approving them.
+func Inspect(source string) ([]Item, string, error) {
 	source, err := filepath.Abs(source)
 	if err != nil {
 		return nil, "", err
@@ -179,7 +202,7 @@ func Load(source string) ([]Item, string, error) {
 		if len(c.Discs) == 0 || (len(c.Discs) > 1 && c.Playlist == nil) {
 			return nil, "", fmt.Errorf("content %q requires discs and a playlist for multiple discs", c.ID)
 		}
-		item := Item{ID: c.ID, card: card{ID: c.ID, CanonicalName: c.CanonicalName, DisplayName: c.DisplayName, Platform: p, DownloadURL: "packages/" + url.PathEscape(c.ID) + ".zip"}}
+		item := Item{ID: c.ID, Available: true, DeferMissing: c.DeferMissing, card: card{ID: c.ID, CanonicalName: c.CanonicalName, DisplayName: c.DisplayName, Platform: p, DownloadURL: "packages/" + url.PathEscape(c.ID) + ".zip"}}
 		paths := map[string]bool{}
 		for _, disc := range c.Discs {
 			if !safePath(disc.Entrypoint, false) || len(disc.Files) == 0 {
@@ -194,15 +217,22 @@ func Load(source string) ([]Item, string, error) {
 				if f.Path == disc.Entrypoint {
 					found = true
 				}
-				f.Source = filepath.Join(filepath.Dir(source), filepath.FromSlash(f.Source))
+				sourcePath := f.Source
+				f.Source = filepath.Join(filepath.Dir(source), filepath.FromSlash(sourcePath))
 				info, err := os.Stat(f.Source)
 				if err != nil {
-					return nil, "", fmt.Errorf("source %q: %w", f.Source, err)
+					if !os.IsNotExist(err) {
+						return nil, "", fmt.Errorf("source %q: %w", f.Source, err)
+					}
+					item.Available = false
+					item.Missing = append(item.Missing, MissingSource{ID: c.ID, Path: sourcePath})
+					fmt.Fprintf(hash, "%q:missing;", f.Source)
+				} else {
+					if !info.Mode().IsRegular() {
+						return nil, "", fmt.Errorf("source %q is not a regular file", f.Source)
+					}
+					fmt.Fprintf(hash, "%q:available:%d:%d;", f.Source, info.Size(), info.ModTime().UnixNano())
 				}
-				if !info.Mode().IsRegular() {
-					return nil, "", fmt.Errorf("source %q is not a regular file", f.Source)
-				}
-				fmt.Fprintf(hash, "%q:%d:%d;", f.Source, info.Size(), info.ModTime().UnixNano())
 				item.files = append(item.files, f)
 				item.card.Files = append(item.card.Files, f.Path)
 			}

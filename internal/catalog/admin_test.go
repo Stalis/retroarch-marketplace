@@ -100,6 +100,7 @@ func TestAdminSecurity(t *testing.T) {
 		{"host", "127.0.0.1:42", "evil.test:5050", "http://evil.test:5050", "application/json", "PUT", "/api/admin/manifest", 403},
 		{"origin missing", "127.0.0.1:42", "localhost:5050", "", "application/json", "PUT", "/api/admin/manifest", 403},
 		{"origin cross", "127.0.0.1:42", "localhost:5050", "http://evil.test", "application/json", "PUT", "/api/admin/manifest", 403},
+		{"forced origin cross", "127.0.0.1:42", "localhost:5050", "http://evil.test", "application/json", "PUT", "/api/admin/manifest?allow_missing=1", 403},
 		{"origin scheme", "127.0.0.1:42", "localhost:5050", "https://localhost:5050", "application/json", "PUT", "/api/admin/manifest", 403},
 		{"content type", "127.0.0.1:42", "localhost:5050", "http://localhost:5050", "text/plain", "PUT", "/api/admin/manifest", 400},
 		{"method", "127.0.0.1:42", "localhost:5050", "", "", "POST", "/api/admin/manifest", 405},
@@ -187,7 +188,7 @@ func TestAdminAllowsSymlinkedSources(t *testing.T) {
 	get := adminRequest(h, "GET", "/api/admin/manifest", nil, "")
 	bad := bytes.Replace(get.Body.Bytes(), []byte("source-0-0"), []byte("missing-source"), 1)
 	w := adminRequest(h, "PUT", "/api/admin/manifest", bad, get.Header().Get("ETag"))
-	if w.Code != 400 || !strings.Contains(w.Body.String(), "source") {
+	if w.Code != 422 || !strings.Contains(w.Body.String(), "missing-source") {
 		t.Fatalf("missing source: %d %s", w.Code, w.Body.String())
 	}
 	updated := bytes.Replace(get.Body.Bytes(), []byte("Étoile Game"), []byte("Symlinked"), 1)

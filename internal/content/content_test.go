@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -165,6 +166,7 @@ func TestSingleAndMultiDisc(t *testing.T) {
 func TestRejectsInvalidSources(t *testing.T) {
 	cases := []struct{ name, old, replacement string }{
 		{"missing source", `"source":"one.bin"`, `"source":"missing.bin"`},
+		{"invalid defer flag", `"id":"single"`, `"id":"single","defer_missing":null`},
 		{"unsafe source", `"source":"one.bin"`, `"source":"sub/../one.bin"`},
 		{"unsafe archive path", `"path":"Single/game.bin"`, `"path":"../game.bin"`},
 		{"duplicate archive path", `"path":"Single/game.bin"`, `"path":"Single/game.cue"`},
@@ -274,5 +276,76 @@ func TestFingerprintTracksManifestPathAndSourceMetadata(t *testing.T) {
 	}
 	if third == fingerprint(source) {
 		t.Fatal("source size did not change fingerprint")
+	}
+}
+
+func TestInspectDeferredMissing(t *testing.T) {
+	manifest := strings.Replace(sourceManifest, `"id":"single"`, `"id":"single","defer_missing":true`, 1)
+	manifest = strings.Replace(manifest, `"source":"one.cue"`, `"source":"absent/one.cue"`, 1)
+	manifest = strings.Replace(manifest, `"source":"one.bin"`, `"source":"absent/one.bin"`, 1)
+	dir, source, _ := sourceFixture(t, manifest)
+	items, missingFingerprint, err := Load(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []MissingSource{{ID: "single", Path: "absent/one.cue"}, {ID: "single", Path: "absent/one.bin"}}
+	if items[0].Available || !items[0].DeferMissing || !reflect.DeepEqual(items[0].Missing, want) || !items[1].Available {
+		t.Fatalf("unexpected availability: %+v", items)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "absent"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"one.cue", "one.bin"} {
+		if err := os.WriteFile(filepath.Join(dir, "absent", name), []byte(name), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	items, availableFingerprint, err := Load(source)
+	if err != nil || !items[0].Available || len(items[0].Missing) != 0 || missingFingerprint == availableFingerprint {
+		t.Fatalf("activation: items=%+v fingerprint changed=%v err=%v", items, missingFingerprint != availableFingerprint, err)
+	}
+}
+
+func TestInspectUnapprovedAndInvalidMissing(t *testing.T) {
+	manifest := strings.Replace(sourceManifest, `"source":"one.bin"`, `"source":"missing/file"`, 1)
+	_, source, _ := sourceFixture(t, manifest)
+	items, _, err := Inspect(source)
+	if err != nil || items[0].Available || !reflect.DeepEqual(items[0].Missing, []MissingSource{{ID: "single", Path: "missing/file"}}) {
+		t.Fatalf("inspection: %+v, %v", items, err)
+	}
+	if _, _, err := Load(source); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unapproved missing: %v", err)
+	}
+	manifest = strings.Replace(manifest, `"entrypoint":"Single/game.cue"`, `"entrypoint":"Single/missing.cue"`, 1)
+	if err := os.WriteFile(source, []byte(manifest), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Inspect(source); err == nil {
+		t.Fatal("missing source masked invalid entrypoint")
+	}
+}
+
+func TestDeferredDoesNotAllowOtherFilesystemErrors(t *testing.T) {
+	manifest := strings.Replace(sourceManifest, `"id":"single"`, `"id":"single","defer_missing":true`, 1)
+	manifest = strings.Replace(manifest, `"source":"one.bin"`, `"source":"restricted/file"`, 1)
+	dir, source, _ := sourceFixture(t, manifest)
+	restricted := filepath.Join(dir, "restricted")
+	if err := os.Mkdir(restricted, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(restricted, "file"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Inspect(source); err == nil {
+		t.Fatal("accepted directory as source")
+	}
+	if err := os.Chmod(restricted, 0000); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(restricted, 0700)
+	if _, err := os.Stat(filepath.Join(restricted, "file")); os.IsPermission(err) {
+		if _, _, err := Inspect(source); !errors.Is(err, os.ErrPermission) {
+			t.Fatalf("permission error overridden: %v", err)
+		}
 	}
 }

@@ -398,3 +398,60 @@ func TestCacheTracksSourcesAndManifestPath(t *testing.T) {
 		t.Fatal("startup accepted missing source")
 	}
 }
+
+func TestDeferredGameAvailability(t *testing.T) {
+	second := strings.Replace(card, `"example"`, `"second"`, 1)
+	catalogPath, packages := fixture(t, "["+card+","+second+"]", map[string][]zipEntry{
+		"example": {{name: "game.txt", data: "content"}},
+		"second":  {{name: "game.txt", data: "other"}},
+	})
+	data, err := os.ReadFile(catalogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest map[string]any
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	manifest["contents"].([]any)[0].(map[string]any)["defer_missing"] = true
+	data, err = json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(catalogPath, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(filepath.Dir(catalogPath), "source-0-0")
+	if err := os.Remove(source); err != nil {
+		t.Fatal(err)
+	}
+	for restart := range 2 {
+		h, err := New(catalogPath, packages)
+		if err != nil {
+			t.Fatal(err)
+		}
+		w := request(t, h, http.MethodGet, "/api/games")
+		if w.Code != http.StatusOK || strings.Contains(w.Body.String(), `"id":"example"`) || !strings.Contains(w.Body.String(), `"id":"second"`) {
+			t.Fatalf("pending catalog: %d %s", w.Code, w.Body.String())
+		}
+		for _, target := range []string{"/api/packages/example.zip", "/assets/cores/Sony%20-%20PlayStation/example.zip"} {
+			if w := request(t, h, http.MethodGet, target); w.Code != http.StatusNotFound {
+				t.Fatalf("pending %s: %d", target, w.Code)
+			}
+		}
+		if restart == 1 {
+			if err := os.WriteFile(source, []byte("content"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			w = request(t, h, http.MethodGet, "/api/games")
+			if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"id":"example"`) {
+				t.Fatalf("activated catalog: %d %s", w.Code, w.Body.String())
+			}
+			for _, target := range []string{"/api/packages/example.zip", "/assets/cores/Sony%20-%20PlayStation/example.zip"} {
+				if w := request(t, h, http.MethodGet, target); w.Code != http.StatusOK {
+					t.Fatalf("activated %s: %d", target, w.Code)
+				}
+			}
+		}
+	}
+}

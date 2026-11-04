@@ -189,6 +189,9 @@ func (s *Server) load() (*catalogSnapshot, error) {
 		packages:    make(map[string]content.Item, len(items)),
 	}
 	for i, item := range items {
+		if !item.Available {
+			continue
+		}
 		g, err := parseGame(item.Card)
 		if err != nil {
 			return nil, fmt.Errorf("game %d: %w", i, err)
