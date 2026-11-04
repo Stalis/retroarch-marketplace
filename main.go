@@ -1,0 +1,35 @@
+package main
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+
+	"retroarch-marketplace/internal/catalog"
+)
+
+func main() {
+	cfg, err := loadConfig(os.Args[1:], os.LookupEnv)
+	if err != nil {
+		if err == flag.ErrHelp {
+			fmt.Fprintln(os.Stderr, "Usage: catalog-server [-config path] [-listen address] [-catalog path] [-packages path] [-scan-interval duration] [-cleanup-interval duration] [-cache-max-age duration]")
+			return
+		}
+		log.Fatal(err)
+	}
+	server, err := catalog.New(cfg.Catalog, cfg.Packages)
+	if err != nil {
+		log.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go server.RunMaintenance(ctx, cfg.ScanInterval, cfg.CleanupInterval, cfg.CacheMaxAge)
+	err = http.ListenAndServe(cfg.Listen, server)
+	cancel()
+	if err != nil {
+		log.Fatal(err)
+	}
+}

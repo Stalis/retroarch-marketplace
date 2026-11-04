@@ -1,0 +1,6 @@
+listen = "127.0.0.1:5050"
+catalog = "catalog-source.json"
+packages = "packages"
+scan_interval = "10m"
+cleanup_interval = "1h"
+cache_max_age = "24h"
