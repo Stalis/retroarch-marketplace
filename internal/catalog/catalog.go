@@ -331,6 +331,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if isAsset {
+		if asset.isAssetsBundle {
+			s.serveAssetsZip(w, r)
+			return
+		}
 		if !asset.isIndex && asset.redirect == "" {
 			item = snapshot.packages["/api/packages/"+url.PathEscape(asset.archive)+".zip"]
 			asset.archive, err = s.archive(snapshot.fingerprint, item)

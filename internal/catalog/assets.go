@@ -2,17 +2,37 @@ package catalog
 
 import (
 	"archive/zip"
+	"bytes"
 	"encoding/hex"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 type assetRoute struct {
 	index, redirect, archive, prefix string
 	isIndex                          bool
+	isAssetsBundle                   bool
+}
+
+// UpstreamAssetsURL is the official Libretro buildbot URL for frontend assets.
+var UpstreamAssetsURL = "https://buildbot.libretro.com/assets/frontend/assets.zip"
+
+func isSafeAssetChar(c rune) bool {
+	return (c >= 'a' && c <= 'z') ||
+		(c >= 'A' && c <= 'Z') ||
+		(c >= '0' && c <= '9') ||
+		c == ' ' || c == '-' || c == '_' ||
+		c == '(' || c == ')' ||
+		c == '[' || c == ']' ||
+		c == '\'' || c == '.' ||
+		c == '!' || c == ',' ||
+		c == '&' || c == '+'
 }
 
 // assetLabels avoids RetroArch's line delimiters and case-insensitive filesystem collisions.
@@ -31,7 +51,7 @@ func assetLabels(values []string) map[string]string {
 			label = "~" + hex.EncodeToString([]byte(value))
 		} else {
 			for _, c := range value {
-				if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == ' ' || c == '-' || c == '_') {
+				if !isSafeAssetChar(c) {
 					label = "~" + hex.EncodeToString([]byte(value))
 					break
 				}
@@ -66,17 +86,26 @@ func assetRoutes(games []game) map[string]assetRoute {
 		categories = append(categories, category)
 		base := root + url.PathEscape(category)
 		routes[base] = assetRoute{redirect: base + "/"}
-		ids := make([]string, 0, len(groups[platform]))
-		for _, g := range groups[platform] {
-			ids = append(ids, g.id)
+		gameList := groups[platform]
+		names := make([]string, 0, len(gameList))
+		for _, g := range gameList {
+			name := g.canonical
+			if name == "" {
+				name = g.id
+			}
+			names = append(names, name)
 		}
-		gameLabels := assetLabels(ids)
-		entries := make([]string, 0, len(ids))
-		for _, g := range groups[platform] {
-			name := gameLabels[g.id]
+		gameLabels := assetLabels(names)
+		entries := make([]string, 0, len(gameList))
+		for i, g := range gameList {
+			name := gameLabels[names[i]]
 			entry := name + ".zip"
 			entries = append(entries, entry)
 			routes[base+"/"+url.PathEscape(entry)] = assetRoute{archive: g.id, prefix: name + "/"}
+			idEntry := g.id + ".zip"
+			if idEntry != entry {
+				routes[base+"/"+url.PathEscape(idEntry)] = assetRoute{archive: g.id, prefix: name + "/"}
+			}
 		}
 		sort.Strings(entries)
 		routes[base+"/.index"] = assetRoute{index: strings.Join(entries, "\n") + "\n", isIndex: true}
@@ -88,6 +117,8 @@ func assetRoutes(games []game) map[string]assetRoute {
 		index += "\n"
 	}
 	routes[root+".index-dirs"] = assetRoute{index: index, isIndex: true}
+	routes["/assets/frontend/assets.zip"] = assetRoute{isAssetsBundle: true}
+	routes["/assets/assets.zip"] = assetRoute{isAssetsBundle: true}
 	return routes
 }
 
@@ -128,4 +159,63 @@ func (a assetRoute) serve(w http.ResponseWriter, r *http.Request) {
 	if err := writer.Close(); err != nil {
 		panic(http.ErrAbortHandler)
 	}
+}
+
+func (s *Server) serveAssetsZip(w http.ResponseWriter, r *http.Request) {
+	cacheDir := filepath.Join(s.packagesDir, ".cache")
+	cachedZip := filepath.Join(cacheDir, "assets.zip")
+
+	for _, candidate := range []string{
+		cachedZip,
+		filepath.Join(s.packagesDir, "assets.zip"),
+		"assets.zip",
+	} {
+		if f, err := os.Open(candidate); err == nil {
+			defer f.Close()
+			if info, err := f.Stat(); err == nil && info.Mode().IsRegular() {
+				w.Header().Set("Content-Type", "application/zip")
+				http.ServeContent(w, r, "assets.zip", info.ModTime(), f)
+				return
+			}
+		}
+	}
+
+	if UpstreamAssetsURL != "" {
+		client := &http.Client{Timeout: 30 * time.Second}
+		resp, err := client.Get(UpstreamAssetsURL)
+		if err == nil && resp.StatusCode == http.StatusOK {
+			defer resp.Body.Close()
+			_ = os.MkdirAll(cacheDir, 0755)
+			tempFile, err := os.CreateTemp(cacheDir, ".assets-*.zip")
+			if err == nil {
+				tempName := tempFile.Name()
+				defer os.Remove(tempName)
+				if _, err := io.Copy(tempFile, resp.Body); err == nil {
+					_ = tempFile.Close()
+					if os.Rename(tempName, cachedZip) == nil {
+						if f, err := os.Open(cachedZip); err == nil {
+							defer f.Close()
+							if info, err := f.Stat(); err == nil {
+								w.Header().Set("Content-Type", "application/zip")
+								http.ServeContent(w, r, "assets.zip", info.ModTime(), f)
+								return
+							}
+						}
+					}
+				} else {
+					_ = tempFile.Close()
+				}
+			}
+		}
+	}
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	if fw, err := zw.Create("retroarch-assets.txt"); err == nil {
+		_, _ = io.WriteString(fw, "RetroArch marketplace asset bundle placeholder\n")
+	}
+	_ = zw.Close()
+
+	w.Header().Set("Content-Type", "application/zip")
+	http.ServeContent(w, r, "assets.zip", time.Time{}, bytes.NewReader(buf.Bytes()))
 }

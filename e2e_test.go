@@ -262,14 +262,14 @@ func TestE2E(t *testing.T) {
 		}
 		category := "/assets/cores/" + url.PathEscape("Sony - PlayStation")
 		index := string(get(category+"/.index", http.StatusOK))
-		if index != "example.zip\nother.zip\n" {
+		if index != "Example Game.zip\nOther Game.zip\n" {
 			t.Fatalf("content index: %q", index)
 		}
 		if got := string(get(category, http.StatusOK)); got != index {
 			t.Fatalf("category redirect: %q", got)
 		}
 		get(category+"/.index-dirs", http.StatusNotFound)
-		data := get(category+"/example.zip", http.StatusOK)
+		data := get(category+"/"+url.PathEscape("Example Game.zip"), http.StatusOK)
 		z, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 		if err != nil {
 			t.Fatal(err)
@@ -289,7 +289,7 @@ func TestE2E(t *testing.T) {
 			}
 			files[f.Name] = string(body)
 		}
-		want := map[string]string{"example/game.m3u": "Disc 1/one.cue\nDisc 2/two.cue\n", "example/Disc 1/one.cue": cue1, "example/Disc 1/one.bin": "first disk", "example/Disc 2/two.cue": cue2, "example/Disc 2/two.bin": "second disk"}
+		want := map[string]string{"Example Game/game.m3u": "Disc 1/one.cue\nDisc 2/two.cue\n", "Example Game/Disc 1/one.cue": cue1, "Example Game/Disc 1/one.bin": "first disk", "Example Game/Disc 2/two.cue": cue2, "Example Game/Disc 2/two.bin": "second disk"}
 		if !reflect.DeepEqual(files, want) {
 			t.Fatalf("asset ZIP contents: %#v", files)
 		}
