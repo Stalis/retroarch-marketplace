@@ -114,3 +114,10 @@ func TestConfigDefaultsAndOptionalFile(t *testing.T) {
 		t.Fatalf("got %+v, want %+v", got, want)
 	}
 }
+
+func TestConfigVersion(t *testing.T) {
+	_, err := loadConfig([]string{"-version"}, configEnv(nil))
+	if err != errVersion {
+		t.Fatalf("expected errVersion, got: %v", err)
+	}
+}

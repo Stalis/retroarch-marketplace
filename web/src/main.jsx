@@ -51,6 +51,7 @@ function App() {
   const [gameReplacement, setGameReplacement] = useState(null);
   const [gameError, setGameError] = useState('');
   const [missing, setMissing] = useState(null);
+  const [serverVersion, setServerVersion] = useState('');
   const dirty = loaded && text !== savedText;
   const parsed = parseManifest(text);
   const manifest = parsed.value;
@@ -81,6 +82,8 @@ function App() {
       if (!revision) throw new Error('noEtag');
       const formatted = formatManifest(body);
       setText(formatted); setSavedText(formatted); setEtag(revision); setLoaded(true); setSelected(0);
+      const ver = response.headers.get('X-Catalog-Version');
+      if (ver) setServerVersion(ver);
       setGameReplacement(null); setNewGame(blankGame()); setGameError('');
       setNotice('loaded'); setAddedPlatform(''); setPlatformError('');
     } catch (err) {
@@ -173,7 +176,7 @@ function App() {
 
   return <div className="app">
     <header className="header">
-      <div><p className="eyebrow">RETROARCH MARKETPLACE</p><h1>{t.title}</h1><p className="subtitle">{t.subtitle}</p></div>
+      <div><p className="eyebrow">RETROARCH MARKETPLACE{serverVersion ? ` • ${serverVersion}` : ''}</p><h1>{t.title}</h1><p className="subtitle">{t.subtitle}</p></div>
       <div className="header-actions">
         <label className="language-selector">{t.language} <select value={locale} onChange={event => { setLocale(event.target.value); setPlatformError(''); setGameError(''); }}><option value="ru">Русский</option><option value="en">English</option></select></label>
         <span className={`status ${dirty ? 'unsaved' : ''}`} role="status">{!loaded ? t.noData : dirty ? t.unsaved : t.saved}</span>

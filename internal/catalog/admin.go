@@ -122,6 +122,9 @@ func markDeferred(candidate []byte, affected map[string]bool) ([]byte, error) {
 }
 
 func (s *Server) serveAdmin(w http.ResponseWriter, r *http.Request) {
+	if Version != "" {
+		w.Header().Set("X-Catalog-Version", Version)
+	}
 	if !localAdmin(r) {
 		http.Error(w, "admin access requires a loopback client and host", http.StatusForbidden)
 		return

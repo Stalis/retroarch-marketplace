@@ -32,6 +32,9 @@ func TestAdminManifestUpdatesAndRepair(t *testing.T) {
 	if get.Code != 200 || get.Header().Get("ETag") != manifestETag(get.Body.Bytes()) {
 		t.Fatalf("GET: %d %s", get.Code, get.Body.String())
 	}
+	if get.Header().Get("X-Catalog-Version") != Version {
+		t.Fatalf("version header: got %q, want %q", get.Header().Get("X-Catalog-Version"), Version)
+	}
 	original := append([]byte(nil), get.Body.Bytes()...)
 	etag := get.Header().Get("ETag")
 	candidate := bytes.Replace(original, []byte("Étoile Game"), []byte("Renamed Game"), 1)

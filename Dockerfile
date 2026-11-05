@@ -8,12 +8,13 @@ RUN npm run build
 
 # Stage 2: Build Go Server with embedded Web
 FROM golang:1.22-alpine AS server-builder
+ARG VERSION=dev
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . ./
 COPY --from=web-builder /app/web/dist ./web/dist
-RUN CGO_ENABLED=0 go build -tags release -ldflags="-s -w" -o /catalog-server .
+RUN CGO_ENABLED=0 go build -tags release -ldflags="-s -w -X main.Version=${VERSION}" -o /catalog-server .
 
 # Stage 3: Minimal Runtime
 FROM alpine:3.20
