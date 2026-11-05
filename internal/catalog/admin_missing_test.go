@@ -14,7 +14,7 @@ func TestAdminMissingConfirmation(t *testing.T) {
 	second := strings.Replace(card, `"example"`, `"second"`, 1)
 	manifest, packages := fixture(t, "["+card+","+second+"]", map[string][]zipEntry{
 		"example": {{name: "game.txt", data: "first"}, {name: "extra.txt", data: "extra"}},
-		"second": {{name: "game.txt", data: "second"}},
+		"second":  {{name: "game.txt", data: "second"}},
 	})
 	h, err := New(manifest, packages)
 	if err != nil {
@@ -57,8 +57,8 @@ func TestAdminMissingConfirmation(t *testing.T) {
 	}
 	var doc struct {
 		Contents []struct {
-			ID string `json:"id"`
-			Defer bool `json:"defer_missing"`
+			ID    string `json:"id"`
+			Defer bool   `json:"defer_missing"`
 		} `json:"contents"`
 	}
 	if err := json.Unmarshal(saved, &doc); err != nil || len(doc.Contents) != 2 || doc.Contents[0].ID != "example" || !doc.Contents[0].Defer || doc.Contents[1].Defer {

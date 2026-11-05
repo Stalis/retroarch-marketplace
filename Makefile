@@ -1,4 +1,4 @@
-.PHONY: run build test e2e vet fmt admin-install admin-build admin-dev admin-dev-mock admin-mock admin-test
+.PHONY: run build build-release test e2e vet fmt admin-install admin-build admin-dev admin-dev-mock admin-mock admin-test
 
 run:
 	go run . $(ARGS)
@@ -6,6 +6,10 @@ run:
 build:
 	mkdir -p bin
 	go build -o bin/catalog-server .
+
+build-release: admin-build
+	mkdir -p bin
+	go build -tags release -ldflags="-s -w" -o bin/catalog-server .
 
 test:
 	go test ./...

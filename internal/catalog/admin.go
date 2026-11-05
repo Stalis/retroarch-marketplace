@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"mime"
 	"net"
 	"net/http"
@@ -279,6 +280,9 @@ func (s *Server) serveAdmin(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// AdminFS serves admin static assets from an in-memory filesystem when non-nil.
+var AdminFS fs.FS
+
 func serveAdminFiles(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", "GET, HEAD")
@@ -287,6 +291,34 @@ func serveAdminFiles(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/admin" {
 		http.Redirect(w, r, "/admin/", http.StatusMovedPermanently)
+		return
+	}
+	rel := strings.TrimPrefix(r.URL.Path, "/admin/")
+	if rel == "" {
+		rel = "index.html"
+	}
+	if path.Clean(rel) != rel || rel == ".." || strings.HasPrefix(rel, "../") || path.IsAbs(rel) || strings.Contains(rel, "\\") {
+		http.NotFound(w, r)
+		return
+	}
+	if AdminFS != nil {
+		f, err := AdminFS.Open(rel)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		defer f.Close()
+		info, err := f.Stat()
+		if err != nil || info.IsDir() {
+			http.NotFound(w, r)
+			return
+		}
+		rs, ok := f.(io.ReadSeeker)
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		http.ServeContent(w, r, info.Name(), info.ModTime(), rs)
 		return
 	}
 	root := filepath.Join("web", "dist")
@@ -299,14 +331,6 @@ func serveAdminFiles(w http.ResponseWriter, r *http.Request) {
 	}
 	if info, err := os.Stat(filepath.Join(root, "index.html")); err != nil || !info.Mode().IsRegular() {
 		http.Error(w, "admin build not found; build web/dist first", http.StatusServiceUnavailable)
-		return
-	}
-	rel := strings.TrimPrefix(r.URL.Path, "/admin/")
-	if rel == "" {
-		rel = "index.html"
-	}
-	if path.Clean(rel) != rel || rel == ".." || strings.HasPrefix(rel, "../") || path.IsAbs(rel) || strings.Contains(rel, "\\") {
-		http.NotFound(w, r)
 		return
 	}
 	filename := root
