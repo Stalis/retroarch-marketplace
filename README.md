@@ -1,141 +1,144 @@
-# RetroArch Content Catalog
+# RetroArch Content Catalog & Asset Server
 
-This project was originally built to develop a custom marketplace protocol for RetroArch. It also supports RetroArch's standard **Content Downloader** asset-server protocol, so the same catalog can be browsed from a stock RetroArch installation.
+Turn your personal collection of game ROMs into a personal game downloader right inside RetroArch.
 
-- **Custom marketplace:** JSON catalog and lazy ZIP downloads; requires a compatible client. See [the protocol notes](CONTENT_CATALOG_PROTOCOL.md).
-- **Standard RetroArch:** browse and download games through Online Updater → Content Downloader.
-- **Web admin:** add platforms and games, edit the manifest, and choose English or Russian.
+Browse, search, and download your games directly from the standard RetroArch interface (**Online Updater → Content Downloader**) on any device on your home network (PC, Steam Deck, mobile, or console). Includes a built-in web management dashboard (English & Russian).
 
-The server uses your local files. It does not provide, create, or download game data.
+> **Disclaimer:** This project is an independent personal initiative and is not affiliated with, endorsed by, or in any way officially connected with RetroArch or the Libretro team. It serves your own local files and does not provide or host copyrighted game data.
 
-> **Disclaimer:** This project is an independent personal initiative and is not affiliated with, endorsed by, or in any way officially connected with RetroArch or the Libretro team. It does not aim to compete or conflict with RetroArch in any way.
+---
 
-## Quick start
+## 🚀 Quick Start (In 3 Simple Steps)
 
-**Requirements:** Go 1.22+, Git, Node.js 20.19+ or 22.12+, and npm. Node.js and npm are only needed for the web admin.
+### Step 1: Start the Server
+
+Choose **one** of the two easy options below:
+
+#### Option A: Download Ready-to-Run Binary (Recommended for Desktop)
+No dependencies, no runtime, and no installation needed — the web admin is built right into the single file.
+
+1. Download the archive for your operating system from [**GitHub Releases**](https://github.com/Stalis/retroarch-marketplace/releases/latest):
+   - **Windows:** `catalog-server-v...-windows-amd64.zip` (or `arm64`)
+   - **macOS:** `catalog-server-v...-darwin-arm64.tar.gz` (Apple Silicon) or `darwin-amd64.tar.gz` (Intel)
+   - **Linux:** `catalog-server-v...-linux-amd64.tar.gz` (or `arm64`)
+2. Extract the archive into a folder on your computer.
+3. Run the executable:
+   - **Windows:** double-click `catalog-server.exe` (or run in PowerShell: `.\catalog-server.exe`)
+   - **macOS / Linux:** open a terminal in that folder and run:
+     ```sh
+     ./catalog-server
+     ```
+
+#### Option B: Run with Docker (Recommended for Home Servers & NAS)
+If you run a home server (Unraid, TrueNAS, Synology, Raspberry Pi, etc.):
+
+```sh
+docker run -d \
+  --name retroarch-catalog \
+  -p 5050:5050 \
+  -v /path/to/your/games:/data \
+  ghcr.io/stalis/retroarch-marketplace:latest
+```
+
+---
+
+### Step 2: Add Your Games in the Web Dashboard
+
+1. Open your browser and go to: **[http://127.0.0.1:5050/admin/](http://127.0.0.1:5050/admin/)**
+2. **Add a Platform**: choose a console from the list of 80+ standard Libretro systems (e.g. *Sony - PlayStation*, *Super Nintendo Entertainment System*, *Sega - Mega Drive - Genesis*).
+3. **Add Games**:
+   - Enter game title.
+   - For single-file games (SNES, Genesis, GBA): specify the ROM filename.
+   - For disc games (PlayStation, Saturn): specify the `.cue` entrypoint and associated `.bin` tracks. Multi-disc games can have `.m3u` playlists generated automatically.
+4. Click **Save** in the top right corner.
+
+> 💡 **Tip:** If you have many games, you can ask an AI assistant to scan your game folder and generate the catalog automatically using our built-in [AI Agent Skill](#-automatic-catalog-generation-with-ai).
+
+---
+
+### Step 3: Connect RetroArch
+
+1. Open RetroArch.
+2. Go to **Settings → Network** (or edit `retroarch.cfg`) and set the Content Downloader URL:
+   ```ini
+   core_updater_buildbot_assets_url = "http://127.0.0.1:5050/assets/"
+   ```
+   *(If RetroArch is on another device like a Steam Deck, TV box, or phone, replace `127.0.0.1` with your computer's local IP address, e.g. `http://192.168.1.50:5050/assets/`)*.
+3. In RetroArch main menu, open:  
+   **Online Updater → Content Downloader**
+4. Pick your platform and download your games! They extract into your RetroArch download directory ready to launch.
+
+---
+
+## 🌐 Network Access (Steam Deck, Consoles, Phones)
+
+By default, the server listens on `127.0.0.1` (only accessible from the same machine). To make games available to RetroArch running on other devices in your home network:
+
+- **Standalone binary:** pass `-listen 0.0.0.0:5050`:
+  ```sh
+  ./catalog-server -listen 0.0.0.0:5050
+  ```
+- **Docker:** already configured to listen on all interfaces (`0.0.0.0:5050`).
+
+> 🔒 **Security Notice:** The web admin interface (`/admin/`) is strictly restricted to loopback connections (`localhost`) so external devices on your network cannot tamper with your catalog.
+
+---
+
+## 🤖 Automatic Catalog Generation with AI
+
+If you have folders with dozens of games (CUE/BIN, ISO, CHD, multi-disc games), you don't need to type them by hand. You can tell your AI assistant (Claude, Cursor, Copilot, etc.) to assemble the catalog for you using the project's agent skill:
+
+- **Skill file:** [`.agents/skills/build-content-manifest`](.agents/skills/build-content-manifest/SKILL.md)
+- **Example prompt:**
+  > *"Scan my games in `/path/to/my/games` and populate `catalog-source.json` using the `build-content-manifest` skill."*
+
+The assistant will match platforms, verify CUE/M3U references, and validate the manifest against the server.
+
+---
+
+## ⚙️ Configuration
+
+The server works out of the box with zero configuration. For advanced setups, you can customize it via flags, environment variables, or a `config.toml` file (see `config.example.toml`):
+
+| Setting | Flag | Environment variable | Default | Description |
+|---|---|---|---|---|
+| Listen address | `-listen` | `RETRO_LISTEN` | `127.0.0.1:5050` | Host and port to bind to |
+| Manifest path | `-catalog` | `RETRO_CATALOG` | `catalog-source.json` | Path to your catalog JSON |
+| Cache folder | `-packages` | `RETRO_PACKAGES` | `packages` | Directory for generated game ZIPs |
+| Scan interval | `-scan-interval` | `RETRO_SCAN_INTERVAL` | `10m` | How often to re-stat source files |
+| Cleanup interval| `-cleanup-interval` | `RETRO_CLEANUP_INTERVAL` | `1h` | Cache cleaner frequency |
+| Cache max age | `-cache-max-age` | `RETRO_CACHE_MAX_AGE` | `24h` | How long to keep generated ZIPs |
+
+Check installed version at any time:
+```sh
+./catalog-server -version
+```
+
+---
+
+## 🛠️ For Developers & Building from Source
+
+If you want to contribute or build the server yourself:
+
+**Prerequisites:** Go 1.22+, Node.js 22+, npm.
 
 ```sh
 git clone https://github.com/Stalis/retroarch-marketplace.git
 cd retroarch-marketplace
 
-# Create an empty manifest on a fresh checkout; do not overwrite an existing one.
-test ! -e catalog-source.json && test ! -L catalog-source.json && \
-  printf '{"platforms":[],"contents":[]}\n' > catalog-source.json
+# Run tests
+make test           # Go unit & E2E tests
+make admin-test     # Frontend unit tests
+make e2e            # E2E tests without cache
 
-make admin-install
-make admin-build
-make run
+# Build standalone release binary with embedded web admin
+make build-release  # Outputs to bin/catalog-server
+
+# Local development
+make run            # Backend on http://127.0.0.1:5050
+make admin-dev      # Vite frontend dev server with live reload
+make admin-dev-mock # Standalone Vite frontend with mock backend
 ```
 
-Open **http://127.0.0.1:5050/admin/**. Add a platform and a game, then click **Save**. Source file paths are relative to the manifest directory. The catalog is available at **http://127.0.0.1:5050/api/games**; an empty catalog returns `[]`.
-
-> **Security:** The server listens on loopback by default and has no authentication. Exposing it to a network makes the catalog and game downloads available to others. The admin interface and API are restricted to loopback clients, but local processes can use them without authentication.
-
-## Use with RetroArch
-
-Set the asset-server URL in `retroarch.cfg`:
-
-```ini
-core_updater_buildbot_assets_url = "http://127.0.0.1:5050/assets/"
-```
-
-In RetroArch, open **Online Updater → Content Downloader**. If RetroArch runs on another device, replace `127.0.0.1` with the server's reachable address and explicitly set `-listen`, for example:
-
-```sh
-make run ARGS="-listen 0.0.0.0:5050"
-```
-
-This server implements Content Downloader, not every resource on the standard buildbot. Other updates that use the same asset URL may stop working until the original setting is restored. Extracted content location depends on RetroArch's settings and version; downloads are not automatically added to a playlist.
-
-## Managing content
-
-The admin supports predefined Libretro platform names and custom platforms. To add a game, enter its ID, title, platform, and one or more discs. For each disc, enter its package-relative entrypoint and the source and package paths for its files. Multiple discs require a playlist path; the server generates the M3U. CUE and other source files are copied unchanged; CUE files are not generated.
-
-Changes remain in the editor until **Save**. The server validates the manifest and files before atomically replacing the manifest. If a file or parent directory is missing, you can return to editing or explicitly save the game with `defer_missing: true`. Such a game stays out of the public catalog until its files appear; other games remain available. Invalid paths and other validation errors cannot be bypassed. Concurrent manifest edits are rejected rather than overwritten.
-
-### Populating the manifest with an AI agent (Skill)
-
-If you have existing game dumps (e.g. CUE/BIN, ISO, CCD/IMG/SUB, or multi-disc folders with M3U), you can instruct an AI assistant to automatically discover and construct `catalog-source.json` using the project's agent skill:
-
-- **Skill location:** [`.agents/skills/build-content-manifest`](.agents/skills/build-content-manifest/SKILL.md)
-
-**Example prompt for your AI assistant:**
-> "Populate `catalog-source.json` from my games in `/path/to/games` using the `build-content-manifest` skill."
-
-**What the skill does:**
-- Analyzes game directories, disc entrypoints, and file sets without altering source files.
-- Verifies internal CUE and M3U references, matching exact filenames and case.
-- Assigns standardized Libretro platform identifiers (e.g. `Sony - PlayStation`).
-- Validates the resulting manifest against a temporary server instance before saving.
-- Flags missing files and offers to mark them as deferred (`defer_missing: true`).
-
-### Manual manifest creation
-
-You can also create or edit the manifest manually. This example runs from the project root and creates `source.json` and `example/game.txt`; do not run it if those paths contain files you want to keep.
-
-```sh
-mkdir -p example
-printf 'My test content\n' > example/game.txt
-cat > source.json <<'JSON'
-{
-  "platforms": [{"id": "test", "name": "Test", "libretro_name": "Test"}],
-  "contents": [{
-    "id": "example",
-    "canonical_name": "Example Game",
-    "platform_id": "test",
-    "discs": [{
-      "entrypoint": "game.txt",
-      "files": [{"source": "example/game.txt", "path": "game.txt"}]
-    }]
-  }]
-}
-JSON
-
-go run . -catalog source.json
-```
-
-`source` is relative to the manifest directory; `path`, `entrypoint`, and `playlist` are relative to the ZIP root. Paths use `/` and must be safe relative paths. Define each platform once and refer to it by `platform_id`. The preset platform list is a snapshot from [libretro-database](https://github.com/libretro/libretro-database/tree/master/rdb), not a list of installed cores.
-
-## Configuration
-
-The optional `config.toml` is read from the current directory. Copy `config.example.toml` to get started, or choose a file with `-config` or `RETRO_CONFIG`. An explicitly specified missing file is an error. Precedence: **CLI flag → environment variable → TOML → default**.
-
-| TOML | Environment variable | Flag | Default |
-|---|---|---|---|
-| `listen` | `RETRO_LISTEN` | `-listen` | `127.0.0.1:5050` |
-| `catalog` | `RETRO_CATALOG` | `-catalog` | `catalog-source.json` |
-| `packages` | `RETRO_PACKAGES` | `-packages` | `packages` |
-| `scan_interval` | `RETRO_SCAN_INTERVAL` | `-scan-interval` | `10m` |
-| `cleanup_interval` | `RETRO_CLEANUP_INTERVAL` | `-cleanup-interval` | `1h` |
-| `cache_max_age` | `RETRO_CACHE_MAX_AGE` | `-cache-max-age` | `24h` |
-
-Intervals are positive Go duration strings, such as `30s`, `10m`, and `24h`. Unknown TOML fields and invalid values prevent startup. Start the server from the project root so it can find the built `web/dist`; the admin is unavailable remotely even with an external `-listen`.
-
-## ZIP cache
-
-ZIPs are built on the first download and reused from `packages/.cache/`. The manifest and each source file's size and `mtime` are checked on requests and periodically; changes invalidate the cache. Checksums are not calculated, so edits preserving both size and `mtime` require a manifest change. Do not modify files during a download.
-
-By default, a background task removes generated cache ZIPs older than 24 hours every hour. Age is based on ZIP modification time, not last use. Active downloads, source files, other files, and existing `packages/<id>.zip` are not deleted. Cache paths and intervals are configurable above.
-
-## Development
-
-```sh
-make test         # Go tests, including E2E
-make e2e          # E2E without the Go test cache
-make admin-test   # frontend tests
-make vet
-make fmt
-make build        # bin/catalog-server
-```
-
-For frontend development against a live server, run `make run` at `127.0.0.1:5050`, then run `make admin-dev` separately.
-
-To develop, test, or redesign the web interface independently without running the Go backend, start the mock development server:
-
-```sh
-make admin-dev-mock   # Vite dev server with built-in mock backend (http://127.0.0.1:5173/admin/)
-```
-
-Alternatively, run `make admin-mock` to launch the standalone mock server on `http://127.0.0.1:5050`. `ARGS` passes flags to `make run`.
-
-E2E uses temporary text files; game data and Python are not required. Actual installation in RetroArch is not covered by the tests.
+- Protocol specifications: [CONTENT_CATALOG_PROTOCOL.md](CONTENT_CATALOG_PROTOCOL.md).
+- Architecture & guidelines for AI agents: [AGENTS.md](AGENTS.md).
