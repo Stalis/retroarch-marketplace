@@ -11,15 +11,24 @@ import (
 	"retroarch-marketplace/internal/catalog"
 )
 
+// Version is set at build time via -ldflags.
+var Version = "dev"
+
 func main() {
 	cfg, err := loadConfig(os.Args[1:], os.LookupEnv)
 	if err != nil {
+		if err == errVersion {
+			fmt.Printf("catalog-server %s\n", Version)
+			return
+		}
 		if err == flag.ErrHelp {
-			fmt.Fprintln(os.Stderr, "Usage: catalog-server [-config path] [-listen address] [-catalog path] [-packages path] [-scan-interval duration] [-cleanup-interval duration] [-cache-max-age duration]")
+			fmt.Fprintln(os.Stderr, "Usage: catalog-server [-version] [-config path] [-listen address] [-catalog path] [-packages path] [-scan-interval duration] [-cleanup-interval duration] [-cache-max-age duration]")
 			return
 		}
 		log.Fatal(err)
 	}
+	catalog.Version = Version
+	log.Printf("starting catalog-server %s on %s", Version, cfg.Listen)
 	server, err := catalog.New(cfg.Catalog, cfg.Packages)
 	if err != nil {
 		log.Fatal(err)

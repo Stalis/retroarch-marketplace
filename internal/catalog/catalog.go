@@ -19,6 +19,9 @@ import (
 	"retroarch-marketplace/internal/content"
 )
 
+// Version is the application version string.
+var Version = "dev"
+
 type game struct {
 	fields                           map[string]json.RawMessage
 	id, canonical, display, platform string

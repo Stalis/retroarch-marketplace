@@ -129,6 +129,7 @@ export class MockBackend {
       res.writeHead(200, {
         'Content-Type': 'application/json',
         'ETag': this.etag,
+        'X-Catalog-Version': '1.0.0-mock',
         'Cache-Control': 'no-store'
       });
       res.end(this.text);

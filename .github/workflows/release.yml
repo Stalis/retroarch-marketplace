@@ -156,7 +156,7 @@ jobs:
             fi
 
             echo "Building $target_os/$target_arch..."
-            CGO_ENABLED=0 GOOS=$target_os GOARCH=$target_arch go build -tags release -ldflags="-s -w" -o "bin/${bin_name}" .
+            CGO_ENABLED=0 GOOS=$target_os GOARCH=$target_arch go build -tags release -ldflags="-s -w -X main.Version=${TAG}" -o "bin/${bin_name}" .
 
             if [ "$target_os" = "windows" ]; then
               (cd bin && zip -9 "../release-assets/${archive_name}.zip" "${bin_name}")
@@ -217,5 +217,7 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
+          build-args: |
+            VERSION=${{ needs.release.outputs.version }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

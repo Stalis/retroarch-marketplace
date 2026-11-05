@@ -1,15 +1,17 @@
 .PHONY: run build build-release test e2e vet fmt admin-install admin-build admin-dev admin-dev-mock admin-mock admin-test
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+
 
 run:
 	go run . $(ARGS)
 
 build:
 	mkdir -p bin
-	go build -o bin/catalog-server .
+	go build -ldflags="-X main.Version=$(VERSION)" -o bin/catalog-server .
 
 build-release: admin-build
 	mkdir -p bin
-	go build -tags release -ldflags="-s -w" -o bin/catalog-server .
+	go build -tags release -ldflags="-s -w -X main.Version=$(VERSION)" -o bin/catalog-server .
 
 test:
 	go test ./...

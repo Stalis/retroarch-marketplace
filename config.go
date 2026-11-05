@@ -20,6 +20,8 @@ type config struct {
 	CacheMaxAge     time.Duration
 }
 
+var errVersion = errors.New("version requested")
+
 type fileConfig struct {
 	Listen          *string `toml:"listen"`
 	Catalog         *string `toml:"catalog"`
@@ -33,6 +35,7 @@ func loadConfig(args []string, lookupEnv func(string) (string, bool)) (config, e
 	cfg := config{"127.0.0.1:5050", "catalog-source.json", "packages", 10 * time.Minute, time.Hour, 24 * time.Hour}
 	flags := flag.NewFlagSet("catalog-server", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
+	version := flags.Bool("version", false, "display version and exit")
 	configPath := flags.String("config", "config.toml", "configuration file")
 	listen := flags.String("listen", "", "HTTP listen address")
 	catalog := flags.String("catalog", "", "source manifest path")
@@ -42,6 +45,9 @@ func loadConfig(args []string, lookupEnv func(string) (string, bool)) (config, e
 	maxAge := flags.String("cache-max-age", "", "maximum cache age")
 	if err := flags.Parse(args); err != nil {
 		return cfg, err
+	}
+	if *version {
+		return cfg, errVersion
 	}
 	if flags.NArg() != 0 {
 		return cfg, fmt.Errorf("unexpected argument %q", flags.Arg(0))
