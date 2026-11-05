@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches-ignore:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    name: Test & Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: 'web/package-lock.json'
+
+      - name: Install web dependencies
+        run: make admin-install
+
+      - name: Run frontend tests
+        run: make admin-test
+
+      - name: Run Go vet
+        run: make vet
+
+      - name: Run Go unit tests
+        run: make test
+
+      - name: Run E2E tests
+        run: make e2e
+
+      - name: Verify release build
+        run: make build-release
