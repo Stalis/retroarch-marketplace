@@ -10,10 +10,28 @@ The server uses your local files. It does not provide, create, or download game 
 
 > **Disclaimer:** This project is an independent personal initiative and is not affiliated with, endorsed by, or in any way officially connected with RetroArch or the Libretro team. It does not aim to compete or conflict with RetroArch in any way.
 
-## Quick start
+## Installation & Quick start
 
-**Requirements:** Go 1.22+, Git, Node.js 20.19+ or 22.12+, and npm. Node.js and npm are only needed for the web admin.
+### Pre-built standalone binaries (Recommended)
 
+Download the standalone executable for macOS, Linux, or Windows from [GitHub Releases](https://github.com/Stalis/retroarch-marketplace/releases). These binaries have the web admin embedded directly into them:
+
+```sh
+./catalog-server -version
+./catalog-server
+```
+
+### Docker
+
+A multi-arch container image (`linux/amd64`, `linux/arm64`) is published to GitHub Container Registry:
+
+```sh
+docker run -d -p 5050:5050 -v $(pwd)/data:/data ghcr.io/stalis/retroarch-marketplace:latest
+```
+
+### Building from source
+
+**Requirements:** Go 1.22+, Git, Node.js 20.19+ or 22.12+, and npm.
 ```sh
 git clone https://github.com/Stalis/retroarch-marketplace.git
 cd retroarch-marketplace
@@ -125,7 +143,8 @@ make e2e          # E2E without the Go test cache
 make admin-test   # frontend tests
 make vet
 make fmt
-make build        # bin/catalog-server
+make build          # dev build without embedded frontend (bin/catalog-server)
+make build-release  # release build with embedded web admin (bin/catalog-server)
 ```
 
 For frontend development against a live server, run `make run` at `127.0.0.1:5050`, then run `make admin-dev` separately.
