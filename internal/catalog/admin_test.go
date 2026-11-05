@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 )
 
 func adminRequest(h http.Handler, method, target string, body []byte, etag string) *httptest.ResponseRecorder {
@@ -240,5 +241,46 @@ func TestAdminStatic(t *testing.T) {
 		if w.Code != want {
 			t.Errorf("%s: %d, want %d", target, w.Code, want)
 		}
+	}
+}
+
+func TestAdminEmbeddedFS(t *testing.T) {
+	manifest, packages := fixture(t, "[]", nil)
+	h, err := New(manifest, packages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(cwd)
+
+	orig := AdminFS
+	defer func() { AdminFS = orig }()
+
+	AdminFS = fstest.MapFS{
+		"index.html":       &fstest.MapFile{Data: []byte("embedded admin")},
+		"assets/bundle.js": &fstest.MapFile{Data: []byte("console.log(1)")},
+	}
+
+	for target, want := range map[string]int{
+		"/admin/":                  200,
+		"/admin/index.html":        200,
+		"/admin/assets/bundle.js":  200,
+		"/admin/assets/missing.js": 404,
+		"/admin/../secret":         404,
+	} {
+		w := adminRequest(h, "GET", target, nil, "")
+		if w.Code != want {
+			t.Errorf("%s: %d, want %d", target, w.Code, want)
+		}
+	}
+	w := adminRequest(h, "GET", "/admin/", nil, "")
+	if !strings.Contains(w.Body.String(), "embedded admin") {
+		t.Fatalf("expected embedded admin body, got: %s", w.Body.String())
 	}
 }
