@@ -48,7 +48,7 @@ func TestAssetDownloader(t *testing.T) {
 	packages := make(map[string][]zipEntry)
 	for i, id := range ids {
 		cards = append(cards, map[string]interface{}{
-			"id": id, "canonical_name": "Game " + id,
+			"id": id, "canonical_name": id,
 			"platform":   map[string]string{"id": "psx", "name": "PlayStation", "libretro_name": platforms[i]},
 			"entrypoint": "game.m3u", "files": []string{"game.m3u", "Disc/game.cue", "Disc/game.bin"}, "download_url": "original.zip",
 		})
@@ -230,5 +230,33 @@ func TestAssetCaseCollisions(t *testing.T) {
 		if got := request(t, h, http.MethodGet, base+url.PathEscape(name)).Code; got != http.StatusOK {
 			t.Errorf("download %q: %d", name, got)
 		}
+	}
+}
+
+func TestAssetUsesCanonicalName(t *testing.T) {
+	manifest, packages := fixture(t, `[{
+		"id": "ct-snes",
+		"canonical_name": "Chrono Trigger (USA)",
+		"platform": {"id": "snes", "name": "Super Nintendo", "libretro_name": "Nintendo - Super Nintendo Entertainment System"},
+		"entrypoint": "game.sfc",
+		"files": ["game.sfc"],
+		"download_url": "dummy.zip"
+	}]`, map[string][]zipEntry{
+		"ct-snes": {{name: "game.sfc", data: "rom data"}},
+	})
+	h, err := New(manifest, packages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := "/assets/cores/" + url.PathEscape("Nintendo - Super Nintendo Entertainment System")
+	index := assetIndex(t, h, base+"/.index")
+	want := []string{"Chrono Trigger (USA).zip"}
+	if !reflect.DeepEqual(index, want) {
+		t.Fatalf("index: %q, want %q", index, want)
+	}
+	target := base + "/" + url.PathEscape("Chrono Trigger (USA).zip")
+	w := request(t, h, http.MethodGet, target)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET %s: %d", target, w.Code)
 	}
 }

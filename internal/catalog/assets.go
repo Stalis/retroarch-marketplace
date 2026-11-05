@@ -15,6 +15,18 @@ type assetRoute struct {
 	isIndex                          bool
 }
 
+func isSafeAssetChar(c rune) bool {
+	return (c >= 'a' && c <= 'z') ||
+		(c >= 'A' && c <= 'Z') ||
+		(c >= '0' && c <= '9') ||
+		c == ' ' || c == '-' || c == '_' ||
+		c == '(' || c == ')' ||
+		c == '[' || c == ']' ||
+		c == '\'' || c == '.' ||
+		c == '!' || c == ',' ||
+		c == '&' || c == '+'
+}
+
 // assetLabels avoids RetroArch's line delimiters and case-insensitive filesystem collisions.
 func assetLabels(values []string) map[string]string {
 	labels := make(map[string]string, len(values))
@@ -31,7 +43,7 @@ func assetLabels(values []string) map[string]string {
 			label = "~" + hex.EncodeToString([]byte(value))
 		} else {
 			for _, c := range value {
-				if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == ' ' || c == '-' || c == '_') {
+				if !isSafeAssetChar(c) {
 					label = "~" + hex.EncodeToString([]byte(value))
 					break
 				}
@@ -66,17 +78,26 @@ func assetRoutes(games []game) map[string]assetRoute {
 		categories = append(categories, category)
 		base := root + url.PathEscape(category)
 		routes[base] = assetRoute{redirect: base + "/"}
-		ids := make([]string, 0, len(groups[platform]))
-		for _, g := range groups[platform] {
-			ids = append(ids, g.id)
+		gameList := groups[platform]
+		names := make([]string, 0, len(gameList))
+		for _, g := range gameList {
+			name := g.canonical
+			if name == "" {
+				name = g.id
+			}
+			names = append(names, name)
 		}
-		gameLabels := assetLabels(ids)
-		entries := make([]string, 0, len(ids))
-		for _, g := range groups[platform] {
-			name := gameLabels[g.id]
+		gameLabels := assetLabels(names)
+		entries := make([]string, 0, len(gameList))
+		for i, g := range gameList {
+			name := gameLabels[names[i]]
 			entry := name + ".zip"
 			entries = append(entries, entry)
 			routes[base+"/"+url.PathEscape(entry)] = assetRoute{archive: g.id, prefix: name + "/"}
+			idEntry := g.id + ".zip"
+			if idEntry != entry {
+				routes[base+"/"+url.PathEscape(idEntry)] = assetRoute{archive: g.id, prefix: name + "/"}
+			}
 		}
 		sort.Strings(entries)
 		routes[base+"/.index"] = assetRoute{index: strings.Join(entries, "\n") + "\n", isIndex: true}
