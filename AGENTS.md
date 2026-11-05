@@ -117,3 +117,5 @@ make admin-mock       # Standalone Node.js mock admin server
 4. **Verification Requirement**:
    - Always verify changes with `make test` and `make admin-test`.
    - Verify UI changes visually or with headless browser scripts (`xd://eval/browser`) when modifying frontend components.
+5. **Git Commits**:
+   - Always create a git commit upon completing requested tasks and passing all verifications.

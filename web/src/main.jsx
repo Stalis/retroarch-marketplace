@@ -36,6 +36,8 @@ function App() {
   const [savedText, setSavedText] = useState('');
   const [etag, setEtag] = useState('');
   const [selected, setSelected] = useState(0);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [activeTab, setActiveTab] = useState('games');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -154,6 +156,21 @@ function App() {
     setNewGame(current => ({ ...current, discs: current.discs.map((disc, i) => i === index ? { ...disc, ...change } : disc) }));
   }
 
+  function formatCurrentJson() {
+    if (parsed.error) return;
+    setText(formatManifest(text));
+  }
+
+  const filteredGames = games
+    .map((item, index) => ({ item, index }))
+    .filter(({ item }) => {
+      if (!searchQuery.trim()) return true;
+      const q = searchQuery.toLowerCase();
+      return (item?.canonical_name && String(item.canonical_name).toLowerCase().includes(q)) ||
+        (item?.id && String(item.id).toLowerCase().includes(q)) ||
+        (item?.display_name && String(item.display_name).toLowerCase().includes(q));
+    });
+
   return <div className="app">
     <header className="header">
       <div><p className="eyebrow">RETROARCH MARKETPLACE</p><h1>{t.title}</h1><p className="subtitle">{t.subtitle}</p></div>
@@ -176,64 +193,125 @@ function App() {
       </section>}
       {busy && <p role="status" className="working">{t.working}</p>}
       {loaded && <>
-        <section className="workspace" aria-label={t.catalogGames}>
-          <aside className="panel games-panel">
-            <div className="panel-heading"><div><p className="eyebrow">{t.catalog}</p><h2>{t.games}</h2></div><span className="count">{games.length}</span></div>
-            {parsed.error ? <p className="muted">{t.fixGames}</p> : games.length === 0 ? <p className="muted">{t.noGames}</p> :
-              <div className="game-list">{games.map((item, index) => <button key={index} className={`game-item ${selected === index ? 'selected' : ''}`} onClick={() => setSelected(index)} aria-pressed={selected === index}>
-                <span className="game-title">{display(item?.canonical_name, display(item?.id, t.gameNumber(index + 1)))}</span><span className="game-platform">{platformName(item?.platform_id)}{item?.defer_missing === true && t.missingAllowedShort}</span>
-              </button>)}</div>}
-          </aside>
-          <section className="panel details">
-            <p className="eyebrow">{t.selectedGame}</p><h2>{t.details}</h2>
-            {game && typeof game === 'object' && !Array.isArray(game) ? <>
-              <label htmlFor="canonical">Canonical Name <span>{t.canonicalHint}</span></label>
-              <input id="canonical" value={typeof game.canonical_name === 'string' ? game.canonical_name : ''} onChange={event => changeName(event.target.value)} disabled={busy} />
-              <dl><div><dt>{t.identifier}</dt><dd>{display(game.id, t.notSpecifiedId)}</dd></div><div><dt>{t.platform}</dt><dd>{platformName(game.platform_id)}</dd></div><div><dt>{t.displayName}</dt><dd>{display(game.display_name, t.notSpecifiedName)}</dd></div><div><dt>{t.discs}</dt><dd>{Array.isArray(game.discs) ? game.discs.length : t.notSpecifiedDiscs}</dd></div></dl>
-              {game.defer_missing === true && <p className="hint">{t.missingAllowed}</p>}
-              <p className="hint">{t.otherFields}</p>
-            </> : <p className="muted">{t.selectGame}</p>}
+        <nav className="tab-bar" aria-label="Sections">
+          <button type="button" className={`tab-item ${activeTab === 'games' ? 'active' : ''}`} onClick={() => setActiveTab('games')}>
+            {t.tabGames} <span className="tab-count">{games.length}</span>
+          </button>
+          <button type="button" className={`tab-item ${activeTab === 'platforms' ? 'active' : ''}`} onClick={() => setActiveTab('platforms')}>
+            {t.tabPlatforms} <span className="tab-count">{platforms.length}</span>
+          </button>
+          <button type="button" className={`tab-item ${activeTab === 'json' ? 'active' : ''}`} onClick={() => setActiveTab('json')}>
+            {t.tabJson} {parsed.error && <span className="tab-error">!</span>}
+          </button>
+        </nav>
+
+        {activeTab === 'games' && <>
+          <section className="workspace" aria-label={t.catalogGames}>
+            <aside className="panel games-panel">
+              <div className="panel-heading">
+                <div><p className="eyebrow">{t.catalog}</p><h2>{t.games}</h2></div>
+                <span className="count">{games.length}</span>
+              </div>
+              <div className="search-box">
+                <input
+                  type="search"
+                  className="search-input"
+                  placeholder={t.searchPlaceholder}
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  aria-label={t.searchPlaceholder}
+                />
+              </div>
+              {parsed.error ? <p className="muted">{t.fixGames}</p> : games.length === 0 ? <p className="muted">{t.noGames}</p> :
+                filteredGames.length === 0 ? <p className="muted">{t.noSearchResults}</p> :
+                <div className="game-list">{filteredGames.map(({ item, index }) => <button key={index} className={`game-item ${selected === index ? 'selected' : ''}`} onClick={() => setSelected(index)} aria-pressed={selected === index}>
+                  <span className="game-title">{display(item?.canonical_name, display(item?.id, t.gameNumber(index + 1)))}</span>
+                  <div className="game-meta">
+                    <span className="game-platform">{platformName(item?.platform_id)}</span>
+                    {item?.defer_missing === true && <span className="badge warning">{t.missingAllowedShort}</span>}
+                  </div>
+                </button>)}</div>}
+            </aside>
+            <section className="panel details">
+              <p className="eyebrow">{t.selectedGame}</p><h2>{t.details}</h2>
+              {game && typeof game === 'object' && !Array.isArray(game) ? <>
+                <label htmlFor="canonical">Canonical Name <span>{t.canonicalHint}</span></label>
+                <input id="canonical" value={typeof game.canonical_name === 'string' ? game.canonical_name : ''} onChange={event => changeName(event.target.value)} disabled={busy} />
+                <dl>
+                  <div><dt>{t.identifier}</dt><dd>{display(game.id, t.notSpecifiedId)}</dd></div>
+                  <div><dt>{t.platform}</dt><dd>{platformName(game.platform_id)}</dd></div>
+                  <div><dt>{t.displayName}</dt><dd>{display(game.display_name, t.notSpecifiedName)}</dd></div>
+                  <div><dt>{t.discs}</dt><dd>{Array.isArray(game.discs) ? game.discs.length : t.notSpecifiedDiscs}</dd></div>
+                </dl>
+                {game.defer_missing === true && <p className="hint">{t.missingAllowed}</p>}
+                <p className="hint">{t.otherFields}</p>
+              </> : <p className="muted">{t.selectGame}</p>}
+            </section>
           </section>
-        </section>
-        <section className="panel game-form-panel" aria-labelledby="add-game-heading">
-          <h2 id="add-game-heading">{t.addGame}</h2>
-          <p className="hint">{t.gameHint}</p>
-          <form onSubmit={submitGame} noValidate>
-            <fieldset disabled={busy}>
-              <legend>{t.gameData}</legend>
-              {[['id', 'ID'], ['canonical_name', t.canonicalName], ['display_name', t.displayOptional]].map(([key, label]) => <div key={key}>
-                <label htmlFor={`game-${key}`}>{label}</label>
-                <input id={`game-${key}`} value={newGame[key]} onChange={event => setNewGame({ ...newGame, [key]: event.target.value })} />
-              </div>)}
-              <label htmlFor="game-platform">{t.platform}</label>
-              <select id="game-platform" value={newGame.platform_id} onChange={event => setNewGame({ ...newGame, platform_id: event.target.value })}>
-                <option value="">{t.choosePlatform}</option>
-                {platforms.filter(item => typeof item?.id === 'string').map((item, index) => <option key={index} value={item.id}>{display(item.name, item.id)} ({item.id})</option>)}
-              </select>
-              {newGame.discs.map((disc, index) => <fieldset className="disc-form" key={index}>
-                <legend>{t.disc(index + 1)}</legend>
-                <label htmlFor={`disc-${index}-entrypoint`}>{t.entrypoint}</label>
-                <input id={`disc-${index}-entrypoint`} value={disc.entrypoint} onChange={event => updateDisc(index, { entrypoint: event.target.value })} />
-                {disc.files.map((file, fileIndex) => <div className="file-form" key={fileIndex}>
-                  <label htmlFor={`disc-${index}-source-${fileIndex}`}>{t.sourceFile(fileIndex + 1)}</label>
-                  <input id={`disc-${index}-source-${fileIndex}`} value={file.source} onChange={event => updateDisc(index, { files: disc.files.map((item, i) => i === fileIndex ? { ...item, source: event.target.value } : item) })} />
-                  <label htmlFor={`disc-${index}-path-${fileIndex}`}>{t.filePath(fileIndex + 1)}</label>
-                  <input id={`disc-${index}-path-${fileIndex}`} value={file.path} onChange={event => updateDisc(index, { files: disc.files.map((item, i) => i === fileIndex ? { ...item, path: event.target.value } : item) })} />
-                  <button type="button" className="secondary" onClick={() => updateDisc(index, { files: disc.files.filter((_, i) => i !== fileIndex) })}>{t.removeFile(fileIndex + 1, index + 1)}</button>
-                </div>)}
-                <button type="button" className="secondary" onClick={() => updateDisc(index, { files: [...disc.files, { source: '', path: '' }] })}>{t.addFile(index + 1)}</button>{' '}
-                <button type="button" className="secondary" onClick={() => setNewGame({ ...newGame, discs: newGame.discs.filter((_, i) => i !== index) })}>{t.removeDisc(index + 1)}</button>
-              </fieldset>)}
-              <button type="button" className="secondary" onClick={() => setNewGame({ ...newGame, discs: [...newGame.discs, blankDisc()] })}>{t.addDisc}</button>
-              <label htmlFor="game-playlist">{newGame.discs.length > 1 ? t.playlistRequired : t.playlistOptional}</label>
-              <input id="game-playlist" value={newGame.playlist} onChange={event => setNewGame({ ...newGame, playlist: event.target.value })} />
-              {gameError && <p className="json-error" role="alert">{message(gameError, t)}</p>}
-              <button className="secondary" type="submit">{gameReplacement ? t.applyGame : t.addGame}</button>
-              {gameReplacement && <button className="secondary" type="button" onClick={() => { setGameReplacement(null); setNewGame(blankGame()); setGameError(''); }}>{t.anotherGame}</button>}
-            </fieldset>
-          </form>
-        </section>
-        <section className="panel platform-panel" aria-labelledby="platform-heading">
+
+          <section className="panel game-form-panel" aria-labelledby="add-game-heading">
+            <h2 id="add-game-heading">{t.addGame}</h2>
+            <p className="hint">{t.gameHint}</p>
+            <form onSubmit={submitGame} noValidate>
+              <fieldset disabled={busy}>
+                <legend>{t.gameData}</legend>
+                <div className="grid-fields">
+                  {[['id', 'ID'], ['canonical_name', t.canonicalName], ['display_name', t.displayOptional]].map(([key, label]) => <div key={key}>
+                    <label htmlFor={`game-${key}`}>{label}</label>
+                    <input id={`game-${key}`} value={newGame[key]} onChange={event => setNewGame({ ...newGame, [key]: event.target.value })} />
+                  </div>)}
+                  <div>
+                    <label htmlFor="game-platform">{t.platform}</label>
+                    <select id="game-platform" value={newGame.platform_id} onChange={event => setNewGame({ ...newGame, platform_id: event.target.value })}>
+                      <option value="">{t.choosePlatform}</option>
+                      {platforms.filter(item => typeof item?.id === 'string').map((item, index) => <option key={index} value={item.id}>{display(item.name, item.id)} ({item.id})</option>)}
+                    </select>
+                  </div>
+                </div>
+                {newGame.discs.map((disc, index) => <fieldset className="disc-form" key={index}>
+                  <div className="disc-header">
+                    <legend>{t.disc(index + 1)}</legend>
+                    <button type="button" className="btn-small danger" onClick={() => setNewGame({ ...newGame, discs: newGame.discs.filter((_, i) => i !== index) })}>{t.removeDisc(index + 1)}</button>
+                  </div>
+                  <div className="entrypoint-field">
+                    <label htmlFor={`disc-${index}-entrypoint`}>{t.entrypoint}</label>
+                    <input id={`disc-${index}-entrypoint`} value={disc.entrypoint} onChange={event => updateDisc(index, { entrypoint: event.target.value })} />
+                  </div>
+                  <div className="files-container">
+                    {disc.files.map((file, fileIndex) => <div className="file-row" key={fileIndex}>
+                      <div className="file-inputs">
+                        <div>
+                          <label htmlFor={`disc-${index}-source-${fileIndex}`}>{t.sourceFile(fileIndex + 1)}</label>
+                          <input id={`disc-${index}-source-${fileIndex}`} value={file.source} onChange={event => updateDisc(index, { files: disc.files.map((item, i) => i === fileIndex ? { ...item, source: event.target.value } : item) })} />
+                        </div>
+                        <div>
+                          <label htmlFor={`disc-${index}-path-${fileIndex}`}>{t.filePath(fileIndex + 1)}</label>
+                          <input id={`disc-${index}-path-${fileIndex}`} value={file.path} onChange={event => updateDisc(index, { files: disc.files.map((item, i) => i === fileIndex ? { ...item, path: event.target.value } : item) })} />
+                        </div>
+                      </div>
+                      <button type="button" className="btn-icon danger" title={t.removeFile(fileIndex + 1, index + 1)} onClick={() => updateDisc(index, { files: disc.files.filter((_, i) => i !== fileIndex) })}>✕</button>
+                    </div>)}
+                  </div>
+                  <button type="button" className="secondary btn-small" onClick={() => updateDisc(index, { files: [...disc.files, { source: '', path: '' }] })}>{t.addFile(index + 1)}</button>
+                </fieldset>)}
+                <div className="game-form-actions">
+                  <button type="button" className="secondary btn-small" onClick={() => setNewGame({ ...newGame, discs: [...newGame.discs, blankDisc()] })}>{t.addDisc}</button>
+                </div>
+                <div>
+                  <label htmlFor="game-playlist">{newGame.discs.length > 1 ? t.playlistRequired : t.playlistOptional}</label>
+                  <input id="game-playlist" value={newGame.playlist} onChange={event => setNewGame({ ...newGame, playlist: event.target.value })} />
+                </div>
+                {gameError && <p className="json-error" role="alert">{message(gameError, t)}</p>}
+                <div className="submit-row">
+                  <button className="primary" type="submit">{gameReplacement ? t.applyGame : t.addGame}</button>
+                  {gameReplacement && <button className="secondary" type="button" onClick={() => { setGameReplacement(null); setNewGame(blankGame()); setGameError(''); }}>{t.anotherGame}</button>}
+                </div>
+              </fieldset>
+            </form>
+          </section>
+        </>}
+
+        {activeTab === 'platforms' && <section className="panel platform-panel" aria-labelledby="platform-heading">
           <div className="panel-heading"><div><p className="eyebrow">{t.catalog}</p><h2 id="platform-heading">{t.platforms}</h2></div><span className="count">{platforms.length}</span></div>
           {parsed.error ? <p className="muted">{t.fixPlatforms}</p> : platforms.length === 0 ? <p className="muted">{t.noPlatforms}</p> :
             <ul className="platform-list">{platforms.map((item, index) => <li key={index}><strong>{display(item?.name, t.unnamed)}</strong> <span>{display(item?.id, t.noId)} · {display(item?.libretro_name, t.noLibretro)}</span></li>)}</ul>}
@@ -256,18 +334,26 @@ function App() {
                   <input id={`platform-${key}`} value={customPlatform[key]} onChange={event => setCustomPlatform({ ...customPlatform, [key]: event.target.value })} />
                 </div>)}
               </>}
-              <button className="secondary" type="submit">{t.addPlatform}</button>
+              <button className="primary" type="submit">{t.addPlatform}</button>
             </fieldset>
           </form>
           {platformError && <p className="json-error" role="alert">{message(platformError, t)}</p>}
           {addedPlatform && <p role="status">{t.platformAdded(addedPlatform)}</p>}
-        </section>
-        <section className="panel json-panel">
-          <div className="json-heading"><div><p className="eyebrow">{t.advanced}</p><h2>{t.fullJson}</h2><p className="muted">{t.jsonHint}</p></div></div>
+        </section>}
+
+        {activeTab === 'json' && <section className="panel json-panel">
+          <div className="json-heading">
+            <div>
+              <p className="eyebrow">{t.advanced}</p>
+              <h2>{t.fullJson}</h2>
+              <p className="muted">{t.jsonHint}</p>
+            </div>
+            <button type="button" className="secondary btn-small" onClick={formatCurrentJson} disabled={busy || !!parsed.error}>{t.formatJson}</button>
+          </div>
           <label htmlFor="manifest-json" className="sr-only">{t.fullJson}</label>
           <textarea id="manifest-json" value={text} onChange={event => { setText(event.target.value); setError(''); setNotice(''); setAddedPlatform(''); setPlatformError(''); }} spellCheck="false" disabled={busy} aria-invalid={!!parsed.error} aria-describedby={parsed.error ? 'json-error' : undefined} />
           {parsed.error && <p id="json-error" className="json-error" role="alert">{t.invalidJson(parsed.error)}</p>}
-        </section>
+        </section>}
       </>}
     </main>
   </div>;
