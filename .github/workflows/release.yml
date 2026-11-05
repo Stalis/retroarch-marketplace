@@ -66,6 +66,8 @@ jobs:
 
       - name: Determine next version
         id: version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [ -n "${{ github.event.inputs.version }}" ]; then
             echo "Using manual version override: ${{ github.event.inputs.version }}"
@@ -95,7 +97,21 @@ jobs:
 
             commits=$(git log "${latest_tag}..HEAD" --format="%s%b")
 
-            if echo "$commits" | grep -Eq 'BREAKING[ -]CHANGE|^[a-zA-Z]+(\([a-zA-Z0-9_-]+\))?!:'; then
+            pr_labels=$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/pulls" --jq '.[0].labels.[].name' 2>/dev/null || true)
+            if [ -n "$pr_labels" ]; then
+              echo "Found merged PR labels: $pr_labels"
+            fi
+
+            if echo "$pr_labels" | grep -Eiq '^(bump:)?major$'; then
+              major=$((major + 1))
+              minor=0
+              patch=0
+            elif echo "$pr_labels" | grep -Eiq '^(bump:)?minor$'; then
+              minor=$((minor + 1))
+              patch=0
+            elif echo "$pr_labels" | grep -Eiq '^(bump:)?patch$'; then
+              patch=$((patch + 1))
+            elif echo "$commits" | grep -Eq 'BREAKING[ -]CHANGE|^[a-zA-Z]+(\([a-zA-Z0-9_-]+\))?!:'; then
               major=$((major + 1))
               minor=0
               patch=0
