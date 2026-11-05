@@ -260,3 +260,32 @@ func TestAssetUsesCanonicalName(t *testing.T) {
 		t.Fatalf("GET %s: %d", target, w.Code)
 	}
 }
+
+func TestAssetAssetsZip(t *testing.T) {
+	manifest, packages := fixture(t, "[]", nil)
+	h, err := New(manifest, packages)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	origURL := UpstreamAssetsURL
+	defer func() { UpstreamAssetsURL = origURL }()
+	UpstreamAssetsURL = ""
+
+	for _, target := range []string{"/assets/frontend/assets.zip", "/assets/assets.zip"} {
+		w := request(t, h, http.MethodGet, target)
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET %s: %d", target, w.Code)
+		}
+		if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/zip") {
+			t.Fatalf("GET %s: wrong Content-Type %s", target, ct)
+		}
+		zr, err := zip.NewReader(bytes.NewReader(w.Body.Bytes()), int64(w.Body.Len()))
+		if err != nil {
+			t.Fatalf("GET %s: invalid zip: %v", target, err)
+		}
+		if len(zr.File) == 0 {
+			t.Fatalf("GET %s: empty zip", target)
+		}
+	}
+}
