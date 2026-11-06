@@ -120,7 +120,7 @@ Check installed version at any time:
 
 If you want to contribute or build the server yourself:
 
-**Prerequisites:** Go 1.22+, Node.js 22+, npm.
+**Prerequisites:** Go 1.27+, Node.js 22+, npm.
 
 ```sh
 git clone https://github.com/Stalis/retroarch-marketplace.git

@@ -7,7 +7,7 @@ COPY web/ ./
 RUN npm run build
 
 # Stage 2: Build Go Server with embedded Web
-FROM golang:1.22-alpine AS server-builder
+FROM golang:1.27-alpine AS server-builder
 ARG VERSION=dev
 WORKDIR /app
 COPY go.mod go.sum ./
