@@ -142,5 +142,7 @@ make admin-dev      # Vite frontend dev server with live reload
 make admin-dev-mock # Standalone Vite frontend with mock backend
 ```
 
-- Protocol specifications: [CONTENT_CATALOG_PROTOCOL.md](CONTENT_CATALOG_PROTOCOL.md).
+- Product specification: [SPECIFICATION.md](SPECIFICATION.md).
+- Public API contract: [openapi.yaml](openapi.yaml).
+- RetroArch client protocol: [CONTENT_CATALOG_PROTOCOL.md](CONTENT_CATALOG_PROTOCOL.md).
 - Architecture & guidelines for AI agents: [AGENTS.md](AGENTS.md).
