@@ -147,6 +147,33 @@ func Load(source string) ([]Item, string, error) {
 	return items, fingerprint, nil
 }
 
+// Platforms returns the manifest's platforms as protocol JSON objects, unique by libretro_name (first wins).
+// Call after Load/Inspect has validated the manifest.
+func Platforms(source string) ([]json.RawMessage, error) {
+	data, err := os.ReadFile(source)
+	if err != nil {
+		return nil, err
+	}
+	var m manifest
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, fmt.Errorf("source JSON: %w", err)
+	}
+	seen := map[string]bool{}
+	result := make([]json.RawMessage, 0, len(m.Platforms))
+	for _, p := range m.Platforms {
+		if seen[p.LibretroName] {
+			continue
+		}
+		seen[p.LibretroName] = true
+		raw, err := json.Marshal(p)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, raw)
+	}
+	return result, nil
+}
+
 // Inspect validates the manifest and reports missing sources without approving them.
 func Inspect(source string) ([]Item, string, error) {
 	source, err := filepath.Abs(source)

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -33,6 +34,22 @@ func TestOpenAPIContract(t *testing.T) {
 	catalog, packages := fixture(t, "["+card+","+second+","+third+"]", map[string][]zipEntry{
 		"example": {{name: "game.txt", data: "a"}}, "second": {{name: "game.txt", data: "b"}}, "third": {{name: "game.txt", data: "c"}},
 	})
+	// A platform without games, visible only with ?all.
+	var source map[string]any
+	data, err := os.ReadFile(catalog)
+	if err == nil {
+		err = json.Unmarshal(data, &source)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	source["platforms"] = append(source["platforms"].([]any), map[string]string{"id": "empty", "name": "Empty", "libretro_name": "Empty - Platform"})
+	if data, err = json.Marshal(source); err == nil {
+		err = os.WriteFile(catalog, data, 0600)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
 	h, err := New(catalog, packages)
 	if err != nil {
 		t.Fatal(err)
@@ -66,6 +83,10 @@ func TestOpenAPIContract(t *testing.T) {
 		{"/assets/cores/.index-dirs", 200, ""},
 		{"/assets/cores/Sega%20-%20Saturn/.index", 200, ""},
 		{"/api/platforms", 200, ""},
+		{"/api/platforms?all", 200, ""},
+		{"/api/platforms?all=true", 200, ""},
+		{"/api/platforms?all=false", 200, ""},
+		{"/api/platforms?all=maybe", 400, ""},
 	} {
 		t.Run(tc.target, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, spec.Servers[0].URL+tc.target, nil)
@@ -95,13 +116,27 @@ func TestOpenAPIContract(t *testing.T) {
 			}
 		})
 	}
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/platforms", nil))
-	var platforms []struct {
-		LibretroName string `json:"libretro_name"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &platforms); err != nil || len(platforms) != 2 ||
-		platforms[0].LibretroName != "Sony - PlayStation" || platforms[1].LibretroName != "Sega - Saturn" {
-		t.Fatalf("platforms: %s (%v)", w.Body.String(), err)
+	for target, want := range map[string]string{
+		"/api/platforms":           "Sony - PlayStation,Sega - Saturn",
+		"/api/platforms?all=false": "Sony - PlayStation,Sega - Saturn",
+		"/api/platforms?all":       "Sony - PlayStation,Sega - Saturn,Empty - Platform",
+		"/api/platforms?all=true":  "Sony - PlayStation,Sega - Saturn,Empty - Platform",
+		"/api/platforms?all=1":     "Sony - PlayStation,Sega - Saturn,Empty - Platform",
+	} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, target, nil))
+		var platforms []struct {
+			LibretroName string `json:"libretro_name"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &platforms); err != nil {
+			t.Fatal(err)
+		}
+		var names []string
+		for _, p := range platforms {
+			names = append(names, p.LibretroName)
+		}
+		if got := strings.Join(names, ","); got != want {
+			t.Fatalf("%s: %q, want %q", target, got, want)
+		}
 	}
 }

@@ -32,6 +32,7 @@ type game struct {
 type catalogSnapshot struct {
 	fingerprint string
 	games       []game
+	platforms   []json.RawMessage // every manifest platform, unique by libretro_name
 	packages    map[string]content.Item
 	assets      map[string]assetRoute
 }
@@ -191,6 +192,9 @@ func (s *Server) load() (*catalogSnapshot, error) {
 		fingerprint: fingerprint,
 		games:       make([]game, 0, len(items)),
 		packages:    make(map[string]content.Item, len(items)),
+	}
+	if snapshot.platforms, err = content.Platforms(s.catalogPath); err != nil {
+		return nil, fmt.Errorf("catalog: %w", err)
 	}
 	for i, item := range items {
 		if !item.Available {
@@ -365,22 +369,32 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(w, file)
 		return
 	}
+	params, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		http.Error(w, "invalid query", http.StatusBadRequest)
+		return
+	}
 	if path == "/api/platforms" {
-		seen := map[string]bool{}
-		platforms := make([]json.RawMessage, 0)
-		for _, g := range snapshot.games {
-			if !seen[g.platform] {
-				seen[g.platform] = true
-				platforms = append(platforms, g.fields["platform"])
+		all := params.Has("all") // bare `?all` means true
+		if v := params.Get("all"); v != "" {
+			if all, err = strconv.ParseBool(v); err != nil {
+				http.Error(w, "invalid all", http.StatusBadRequest)
+				return
+			}
+		}
+		platforms := snapshot.platforms
+		if !all {
+			seen := map[string]bool{}
+			platforms = make([]json.RawMessage, 0)
+			for _, g := range snapshot.games {
+				if !seen[g.platform] {
+					seen[g.platform] = true
+					platforms = append(platforms, g.fields["platform"])
+				}
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(platforms)
-		return
-	}
-	params, err := url.ParseQuery(r.URL.RawQuery)
-	if err != nil {
-		http.Error(w, "invalid query", http.StatusBadRequest)
 		return
 	}
 	query := params.Get("q")
