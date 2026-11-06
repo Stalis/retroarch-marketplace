@@ -333,7 +333,7 @@ function App() {
         {activeTab === 'platforms' && <section className="panel platform-panel" aria-labelledby="platform-heading">
           <div className="panel-heading"><div><p className="eyebrow">{t.catalog}</p><h2 id="platform-heading">{t.platforms}</h2></div><span className="count">{platforms.length}</span></div>
           {parsed.error ? <p className="muted">{t.fixPlatforms}</p> : platforms.length === 0 ? <p className="muted">{t.noPlatforms}</p> :
-            <ul className="platform-list">{platforms.map((item, index) => <li key={index}><strong>{display(item?.name, t.unnamed)}</strong> <span>{display(item?.id, t.noId)} · {display(item?.libretro_name, t.noLibretro)}{served && ` · ${served.platforms.includes(item?.libretro_name) ? t.publishedGames(served.counts[item.libretro_name]) : t.notPublished}`}</span></li>)}</ul>}
+            <ul className="platform-list">{platforms.map((item, index) => <li key={index}><strong>{display(item?.name, t.unnamed)}</strong> <span>{display(item?.id, t.noId)} · {display(item?.libretro_name, t.noLibretro)}{served && ` · ${served.platforms.includes(item?.libretro_name) ? t.publishedGames(served.counts[item.libretro_name] || 0) : t.notOnServer}`}</span></li>)}</ul>}
           <form className="platform-form" onSubmit={submitPlatform}>
             <fieldset disabled={busy}>
               <legend>{t.addPlatform}</legend>

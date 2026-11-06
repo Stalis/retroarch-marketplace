@@ -375,26 +375,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if path == "/api/platforms" {
-		all := params.Has("all") // bare `?all` means true
-		if v := params.Get("all"); v != "" {
-			if all, err = strconv.ParseBool(v); err != nil {
-				http.Error(w, "invalid all", http.StatusBadRequest)
-				return
-			}
-		}
-		platforms := snapshot.platforms
-		if !all {
-			seen := map[string]bool{}
-			platforms = make([]json.RawMessage, 0)
-			for _, g := range snapshot.games {
-				if !seen[g.platform] {
-					seen[g.platform] = true
-					platforms = append(platforms, g.fields["platform"])
-				}
-			}
-		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(platforms)
+		_ = json.NewEncoder(w).Encode(snapshot.platforms)
 		return
 	}
 	query := params.Get("q")

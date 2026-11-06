@@ -130,10 +130,7 @@ export class MockBackend {
 
     if ((pathname === '/api/games' || pathname === '/api/platforms') && req.method === 'GET') {
       const games = this.publicGames();
-      const all = url.searchParams.has('all') && url.searchParams.get('all') !== 'false';
-      const body = pathname === '/api/games' ? games
-        : all ? JSON.parse(this.text).platforms
-          : [...new Map(games.map(game => [game.platform.libretro_name, game.platform])).values()];
+      const body = pathname === '/api/games' ? games : JSON.parse(this.text).platforms;
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(body));
       return;

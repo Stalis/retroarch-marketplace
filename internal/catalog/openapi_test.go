@@ -83,10 +83,6 @@ func TestOpenAPIContract(t *testing.T) {
 		{"/assets/cores/.index-dirs", 200, ""},
 		{"/assets/cores/Sega%20-%20Saturn/.index", 200, ""},
 		{"/api/platforms", 200, ""},
-		{"/api/platforms?all", 200, ""},
-		{"/api/platforms?all=true", 200, ""},
-		{"/api/platforms?all=false", 200, ""},
-		{"/api/platforms?all=maybe", 400, ""},
 	} {
 		t.Run(tc.target, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, spec.Servers[0].URL+tc.target, nil)
@@ -116,27 +112,19 @@ func TestOpenAPIContract(t *testing.T) {
 			}
 		})
 	}
-	for target, want := range map[string]string{
-		"/api/platforms":           "Sony - PlayStation,Sega - Saturn",
-		"/api/platforms?all=false": "Sony - PlayStation,Sega - Saturn",
-		"/api/platforms?all":       "Sony - PlayStation,Sega - Saturn,Empty - Platform",
-		"/api/platforms?all=true":  "Sony - PlayStation,Sega - Saturn,Empty - Platform",
-		"/api/platforms?all=1":     "Sony - PlayStation,Sega - Saturn,Empty - Platform",
-	} {
-		w := httptest.NewRecorder()
-		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, target, nil))
-		var platforms []struct {
-			LibretroName string `json:"libretro_name"`
-		}
-		if err := json.Unmarshal(w.Body.Bytes(), &platforms); err != nil {
-			t.Fatal(err)
-		}
-		var names []string
-		for _, p := range platforms {
-			names = append(names, p.LibretroName)
-		}
-		if got := strings.Join(names, ","); got != want {
-			t.Fatalf("%s: %q, want %q", target, got, want)
-		}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/platforms", nil))
+	var platforms []struct {
+		LibretroName string `json:"libretro_name"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &platforms); err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, p := range platforms {
+		names = append(names, p.LibretroName)
+	}
+	if got, want := strings.Join(names, ","), "Sony - PlayStation,Sega - Saturn,Empty - Platform"; got != want {
+		t.Fatalf("platforms %q, want %q", got, want)
 	}
 }

@@ -62,29 +62,16 @@ paths:
       operationId: listPlatforms
       summary: List platforms
       description: |
-        Used by the RetroArch menu to group downloads. `libretro_name` is the value accepted by the `platform` filter of `/api/games`.
-        By default only platforms that have at least one game are returned.
-      parameters:
-        - name: all
-          in: query
-          description: |
-            Return every platform known to the catalog, including those without games.
-            Bare `?all` and `all=true` enable it; `all=false` is the default behaviour.
-          allowEmptyValue: true
-          schema: { type: boolean, default: false }
+        Every platform declared in the manifest, including those without games, in manifest order.
+        `libretro_name` is the value accepted by the `platform` filter of `/api/games`.
       responses:
         "200":
-          description: Top-level JSON array of platforms with unique `libretro_name`; `[]` when the catalog is empty.
+          description: Top-level JSON array of platforms with unique `libretro_name`; `[]` when the manifest has none.
           content:
             application/json:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/Platform" }
-        "400":
-          description: Malformed query string or `all` is not a boolean.
-          content:
-            text/plain:
-              schema: { type: string }
         "500":
           description: Manifest is invalid.
           content:
