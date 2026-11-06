@@ -36,7 +36,7 @@ This repository contains a local content catalog and asset server for RetroArch,
 │   └── vite.config.js
 ├── .agents/skills/               # Agent skills
 │   └── build-content-manifest/   # Skill for assembling manifests from user files
-├── CONTENT_CATALOG_PROTOCOL.md   # Recovered RetroArch marketplace protocol specification
+├── SPECIFICATION.md              # Product specification
 └── e2e_test.go                   # End-to-end integration test suite
 ```
 
@@ -50,7 +50,7 @@ This repository contains a local content catalog and asset server for RetroArch,
    - Games with missing sources can have `defer_missing: true`: they are retained in the manifest but omitted from the active catalog until files exist on disk.
 
 2. **Catalog & Package Server (`internal/catalog/catalog.go`)**:
-   - `GET /api/games`: Serves cards conforming to `CONTENT_CATALOG_PROTOCOL.md`. Supports `?q=` Unicode case-insensitive substring search on canonical and display names.
+   - `GET /api/games`: Serves cards conforming to `openapi.yaml`. Supports `?q=` Unicode case-insensitive substring search on canonical and display names.
    - `GET /api/packages/<encoded-id>.zip`: Lazily generates and caches game ZIPs in `packages/.cache/<fingerprint>-<id_hash>.zip`.
    - Manifest reloads dynamically on requests if file size or `mtime` changes. Invalid manifests result in 500 error rather than serving stale content.
    - Active downloads hold reference-counted leases so the background cleaner never removes a file currently being streamed.

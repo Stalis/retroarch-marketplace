@@ -4,7 +4,7 @@
 
 The application serves a user's local game collection to RetroArch and provides a local web interface for managing the collection. It does not provide or host game files. The supported user workflows are maintaining a manifest, browsing the published catalog, and downloading game archives through the catalog API or RetroArch Content Downloader.
 
-This document records the current product contract inferred from [README.md](README.md), [openapi.yaml](openapi.yaml), and the implementation; it is not a recovered statement of the original author's intent. The OpenAPI document defines the public HTTP response schemas, parameters, and listed status codes. [CONTENT_CATALOG_PROTOCOL.md](CONTENT_CATALOG_PROTOCOL.md) describes the independently recovered RetroArch client behavior, not additional server requirements. If this document and OpenAPI disagree about a public endpoint, the discrepancy must be resolved explicitly rather than assumed to be intentional.
+This document records the current product contract inferred from [README.md](README.md), [openapi.yaml](openapi.yaml), and the implementation; it is not a recovered statement of the original author's intent. The OpenAPI document defines the public HTTP response schemas, parameters, and listed status codes. If this document and OpenAPI disagree about a public endpoint, the discrepancy must be resolved explicitly rather than assumed to be intentional.
 
 ## Domain
 

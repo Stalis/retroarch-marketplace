@@ -144,5 +144,4 @@ make admin-dev-mock # Standalone Vite frontend with mock backend
 
 - Product specification: [SPECIFICATION.md](SPECIFICATION.md).
 - Public API contract: [openapi.yaml](openapi.yaml).
-- RetroArch client protocol: [CONTENT_CATALOG_PROTOCOL.md](CONTENT_CATALOG_PROTOCOL.md).
 - Architecture & guidelines for AI agents: [AGENTS.md](AGENTS.md).

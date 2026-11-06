@@ -4,8 +4,7 @@ info:
   title: RetroArch Content Catalog API
   version: 1.0.0
   description: |
-    Public client contract of the catalog server. Companion to CONTENT_CATALOG_PROTOCOL.md,
-    which documents what the RetroArch client parses. The loopback-only admin API
+    Public client contract of the catalog server. The loopback-only admin API
     (/api/admin/*, /admin/) is intentionally not part of this spec.
 
     Client-side validation rules not expressible in OpenAPI:
