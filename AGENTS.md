@@ -16,8 +16,9 @@ This repository contains a local content catalog and asset server for RetroArch,
 │   │   ├── content.go
 │   │   └── content_test.go
 │   └── catalog/                  # HTTP handlers & background maintenance
-│       ├── catalog.go            # /api/games and /api/packages/<id>.zip routes
-│       ├── assets.go             # Standard RetroArch Content Downloader (/assets/cores/...)
+│       ├── catalog.go            # Shared snapshot, cache, and request dispatch
+│       ├── customapi.go          # Application catalog API (/api/games, /api/platforms, /api/packages/...)
+│       ├── retroarch.go          # RetroArch Content Downloader compatibility (/assets/...)
 │       ├── admin.go              # Loopback-only admin API & static web/dist serving
 │       ├── maintenance.go        # Periodic source checks & cache cleanup scheduler
 │       ├── catalog_test.go
@@ -49,13 +50,13 @@ This repository contains a local content catalog and asset server for RetroArch,
    - Multi-disc games specify `playlist` (e.g. `game.m3u`). The server generates this M3U dynamically in order of disc entrypoints.
    - Games with missing sources can have `defer_missing: true`: they are retained in the manifest but omitted from the active catalog until files exist on disk.
 
-2. **Catalog & Package Server (`internal/catalog/catalog.go`)**:
+2. **Catalog & Package Server (`internal/catalog/customapi.go`, shared state in `catalog.go`)**:
    - `GET /api/games`: Serves cards conforming to `openapi.yaml`. Supports `?q=` Unicode case-insensitive substring search on canonical and display names.
    - `GET /api/packages/<encoded-id>.zip`: Lazily generates and caches game ZIPs in `packages/.cache/<fingerprint>-<id_hash>.zip`.
    - Manifest reloads dynamically on requests if file size or `mtime` changes. Invalid manifests result in 500 error rather than serving stale content.
    - Active downloads hold reference-counted leases so the background cleaner never removes a file currently being streamed.
 
-3. **RetroArch Content Downloader Compatibility (`internal/catalog/assets.go`)**:
+3. **RetroArch Content Downloader Compatibility (`internal/catalog/retroarch.go`)**:
    - Implements standard RetroArch asset server protocol (`core_updater_buildbot_assets_url = "http://<host>:5050/assets/"`).
    - `GET /assets/cores/.index-dirs`: Newline-delimited list of platform directory names.
    - `GET /assets/cores/<platform>/.index`: Newline-delimited list of available `<game>.zip` archives.

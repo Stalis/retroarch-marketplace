@@ -19,6 +19,8 @@ This document records the current product contract inferred from [README.md](REA
 
 The public API has no authentication and is described in [openapi.yaml](openapi.yaml). In particular:
 
+The application catalog handlers (`internal/catalog/customapi.go`) and the RetroArch Content Downloader handlers (`internal/catalog/retroarch.go`) are separate modules in the same Go package. Both use the same validated catalog snapshot and package cache. The catalog card format remains compatible with the RetroArch catalog client; the `/assets/` handlers implement the standard Content Downloader interface.
+
 1. `GET /api/games` returns available games as a JSON array. Search and platform filters combine with AND; pagination is applied after filtering. Each card describes the exact files in its package.
 2. `GET /api/platforms` returns declared platforms, including platforms without available games, in manifest order. For repeated `libretro_name` values, only the first platform is returned.
 3. A card's `download_url` resolves to a lazily generated, cached ZIP containing exactly the card's listed files. Generated playlists are included where applicable.

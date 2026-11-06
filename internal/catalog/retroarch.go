@@ -122,6 +122,24 @@ func assetRoutes(games []game) map[string]assetRoute {
 	return routes
 }
 
+func (s *Server) serveRetroArch(w http.ResponseWriter, r *http.Request, snapshot *catalogSnapshot, asset assetRoute) {
+	if asset.isAssetsBundle {
+		s.serveAssetsZip(w, r)
+		return
+	}
+	if !asset.isIndex && asset.redirect == "" {
+		item := snapshot.packages["/api/packages/"+url.PathEscape(asset.archive)+".zip"]
+		var err error
+		asset.archive, err = s.archive(snapshot.fingerprint, item)
+		if err != nil {
+			http.Error(w, "package unavailable", http.StatusInternalServerError)
+			return
+		}
+		defer s.releaseArchive(asset.archive)
+	}
+	asset.serve(w, r)
+}
+
 func (a assetRoute) serve(w http.ResponseWriter, r *http.Request) {
 	if a.redirect != "" {
 		http.Redirect(w, r, a.redirect, http.StatusMovedPermanently)
