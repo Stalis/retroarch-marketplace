@@ -65,6 +65,7 @@ func TestOpenAPIContract(t *testing.T) {
 		{"/api/packages/example.zip", 200, ""},
 		{"/assets/cores/.index-dirs", 200, ""},
 		{"/assets/cores/Sega%20-%20Saturn/.index", 200, ""},
+		{"/api/platforms", 200, ""},
 	} {
 		t.Run(tc.target, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, spec.Servers[0].URL+tc.target, nil)
@@ -93,5 +94,14 @@ func TestOpenAPIContract(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/platforms", nil))
+	var platforms []struct {
+		LibretroName string `json:"libretro_name"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &platforms); err != nil || len(platforms) != 2 ||
+		platforms[0].LibretroName != "Sony - PlayStation" || platforms[1].LibretroName != "Sega - Saturn" {
+		t.Fatalf("platforms: %s (%v)", w.Body.String(), err)
 	}
 }

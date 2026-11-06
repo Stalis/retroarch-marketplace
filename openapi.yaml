@@ -57,6 +57,24 @@ paths:
           content:
             text/plain:
               schema: { type: string }
+  /api/platforms:
+    get:
+      operationId: listPlatforms
+      summary: List platforms that have at least one game
+      description: Used by the RetroArch menu to group downloads. `libretro_name` is the value accepted by the `platform` filter of `/api/games`.
+      responses:
+        "200":
+          description: Top-level JSON array of platforms with unique `libretro_name`; `[]` when the catalog is empty.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Platform" }
+        "500":
+          description: Manifest is invalid.
+          content:
+            text/plain:
+              schema: { type: string }
   /api/packages/{package}:
     get:
       operationId: downloadPackage

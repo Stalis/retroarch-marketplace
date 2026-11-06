@@ -21,6 +21,7 @@ export const messages = {
     advanced: 'РАСШИРЕННОЕ РЕДАКТИРОВАНИЕ', fullJson: 'Полный манифест JSON', jsonHint: 'Здесь доступны все поля, включая платформы, диски и файлы. Изменения синхронизированы с карточкой игры.', invalidJson: detail => `Некорректный JSON: ${detail}. Исправьте синтаксис перед сохранением.`,
     searchPlaceholder: 'Поиск по названию или ID…', formatJson: 'Форматировать JSON', noSearchResults: 'Игры не найдены',
     tabGames: 'Игры', tabPlatforms: 'Платформы', tabJson: 'JSON-манифест',
+    publishedGames: n => `опубликовано игр: ${n}`, notPublished: 'нет опубликованных игр',
   },
   en: {
     title: 'Catalog management', subtitle: 'Local manifest editor', language: 'Language',
@@ -44,6 +45,7 @@ export const messages = {
     advanced: 'ADVANCED EDITING', fullJson: 'Full JSON manifest', jsonHint: 'All fields are available here, including platforms, discs and files. Changes are synchronized with the game details.', invalidJson: detail => `Invalid JSON: ${detail}. Fix the syntax before saving.`,
     searchPlaceholder: 'Search by title or ID…', formatJson: 'Format JSON', noSearchResults: 'No games found',
     tabGames: 'Games', tabPlatforms: 'Platforms', tabJson: 'JSON Manifest',
+    publishedGames: n => `published games: ${n}`, notPublished: 'no published games',
   },
 };
 

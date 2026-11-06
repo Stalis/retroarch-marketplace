@@ -322,7 +322,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.EscapedPath()
 	item, isPackage := snapshot.packages[path]
 	asset, isAsset := snapshot.assets[path]
-	if path != "/api/games" && !isPackage && !isAsset {
+	if path != "/api/games" && path != "/api/platforms" && !isPackage && !isAsset {
 		http.NotFound(w, r)
 		return
 	}
@@ -363,6 +363,19 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		defer file.Close()
 		w.Header().Set("Content-Type", "application/zip")
 		_, _ = io.Copy(w, file)
+		return
+	}
+	if path == "/api/platforms" {
+		seen := map[string]bool{}
+		platforms := make([]json.RawMessage, 0)
+		for _, g := range snapshot.games {
+			if !seen[g.platform] {
+				seen[g.platform] = true
+				platforms = append(platforms, g.fields["platform"])
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(platforms)
 		return
 	}
 	params, err := url.ParseQuery(r.URL.RawQuery)

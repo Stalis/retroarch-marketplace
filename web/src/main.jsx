@@ -6,6 +6,20 @@ import { initialLocale, messages, persistLocale } from './i18n.js';
 import './style.css';
 
 const endpoint = '/api/admin/manifest';
+
+// Public catalog as RetroArch sees it; null when unavailable (the editor still works).
+async function fetchServed() {
+  try {
+    const [platforms, games] = await Promise.all(['/api/platforms', '/api/games'].map(async url => {
+      const response = await fetch(url, { cache: 'no-store' });
+      if (!response.ok) throw new Error(url);
+      return response.json();
+    }));
+    const counts = {};
+    for (const game of games) counts[game.platform.libretro_name] = (counts[game.platform.libretro_name] || 0) + 1;
+    return { platforms: platforms.map(platform => platform.libretro_name), counts };
+  } catch { return null; }
+}
 const display = (value, fallback) => typeof value === 'string' && value ? value : fallback;
 const blankDisc = () => ({ entrypoint: '', files: [{ source: '', path: '' }] });
 const blankGame = () => ({ id: '', canonical_name: '', display_name: '', platform_id: '', playlist: '', discs: [blankDisc()] });
@@ -42,6 +56,7 @@ function App() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [loaded, setLoaded] = useState(false);
+  const [served, setServed] = useState(null);
   const [platformMode, setPlatformMode] = useState('preset');
   const [preset, setPreset] = useState('');
   const [customPlatform, setCustomPlatform] = useState({ id: '', name: '', libretro_name: '' });
@@ -74,6 +89,7 @@ function App() {
   async function load(confirmDiscard = true) {
     if (confirmDiscard && dirty && !window.confirm(t.discard)) return;
     setBusy(true); setError(''); setNotice(''); setMissing(null);
+    const servedRequest = fetchServed();
     try {
       const response = await fetch(endpoint, { cache: 'no-store' });
       if (!response.ok) throw await responseError(response);
@@ -85,7 +101,7 @@ function App() {
       const ver = response.headers.get('X-Catalog-Version');
       if (ver) setServerVersion(ver);
       setGameReplacement(null); setNewGame(blankGame()); setGameError('');
-      setNotice('loaded'); setAddedPlatform(''); setPlatformError('');
+      setNotice('loaded'); setAddedPlatform(''); setPlatformError(''); setServed(await servedRequest);
     } catch (err) {
       setError(err instanceof TypeError ? 'loadNetwork' : err instanceof Error ? err.message : err);
     } finally { setBusy(false); }
@@ -123,7 +139,7 @@ function App() {
       const saved = response.status === 200 ? formatManifest(await response.text()) : submitted;
       setText(saved); setEtag(revision); setSavedText(saved); setNotice('savedNotice'); setAddedPlatform('');
       if (gameReplacement && gameReplacement.draft === JSON.stringify(newGame)) setNewGame(blankGame());
-      setGameReplacement(null);
+      setGameReplacement(null); setServed(await fetchServed());
     } catch (err) {
       setError(err instanceof TypeError ? 'saveNetwork' : err instanceof Error ? err.message : err);
     } finally { setBusy(false); }
@@ -317,7 +333,7 @@ function App() {
         {activeTab === 'platforms' && <section className="panel platform-panel" aria-labelledby="platform-heading">
           <div className="panel-heading"><div><p className="eyebrow">{t.catalog}</p><h2 id="platform-heading">{t.platforms}</h2></div><span className="count">{platforms.length}</span></div>
           {parsed.error ? <p className="muted">{t.fixPlatforms}</p> : platforms.length === 0 ? <p className="muted">{t.noPlatforms}</p> :
-            <ul className="platform-list">{platforms.map((item, index) => <li key={index}><strong>{display(item?.name, t.unnamed)}</strong> <span>{display(item?.id, t.noId)} · {display(item?.libretro_name, t.noLibretro)}</span></li>)}</ul>}
+            <ul className="platform-list">{platforms.map((item, index) => <li key={index}><strong>{display(item?.name, t.unnamed)}</strong> <span>{display(item?.id, t.noId)} · {display(item?.libretro_name, t.noLibretro)}{served && ` · ${served.platforms.includes(item?.libretro_name) ? t.publishedGames(served.counts[item.libretro_name]) : t.notPublished}`}</span></li>)}</ul>}
           <form className="platform-form" onSubmit={submitPlatform}>
             <fieldset disabled={busy}>
               <legend>{t.addPlatform}</legend>

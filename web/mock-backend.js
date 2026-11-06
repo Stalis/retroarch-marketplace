@@ -107,6 +107,15 @@ export class MockBackend {
     return missing;
   }
 
+  // Mirrors the public /api/games cards (minimal fields): games not deferred and with a known platform.
+  publicGames() {
+    const manifest = JSON.parse(this.text);
+    const platforms = new Map(manifest.platforms.map(platform => [platform.id, platform]));
+    return manifest.contents
+      .filter(item => item.defer_missing !== true && platforms.has(item.platform_id))
+      .map(item => ({ id: item.id, canonical_name: item.canonical_name, platform: platforms.get(item.platform_id) }));
+  }
+
   handle(req, res) {
     const url = new URL(req.url, 'http://127.0.0.1');
     const pathname = url.pathname;
@@ -116,6 +125,14 @@ export class MockBackend {
       this.reset();
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ ok: true, etag: this.etag }));
+      return;
+    }
+
+    if ((pathname === '/api/games' || pathname === '/api/platforms') && req.method === 'GET') {
+      const games = this.publicGames();
+      const body = pathname === '/api/games' ? games : [...new Map(games.map(game => [game.platform.libretro_name, game.platform])).values()];
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(body));
       return;
     }
 
