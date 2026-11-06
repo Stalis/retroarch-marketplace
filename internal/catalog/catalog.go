@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"unicode"
@@ -370,11 +371,34 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	query := params.Get("q")
+	platform := params.Get("platform")
+	skip, count := 0, -1
+	for name, dst := range map[string]*int{"skip": &skip, "count": &count} {
+		if v := params.Get(name); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 0 {
+				http.Error(w, "invalid "+name, http.StatusBadRequest)
+				return
+			}
+			*dst = n
+		}
+	}
 	results := make([]map[string]json.RawMessage, 0)
 	for _, g := range snapshot.games {
-		if containsFold(g.canonical, query) || containsFold(g.display, query) {
-			results = append(results, g.fields)
+		if platform != "" && g.platform != platform {
+			continue
 		}
+		if !containsFold(g.canonical, query) && !containsFold(g.display, query) {
+			continue
+		}
+		if skip > 0 {
+			skip--
+			continue
+		}
+		if count >= 0 && len(results) >= count {
+			break
+		}
+		results = append(results, g.fields)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(results)
