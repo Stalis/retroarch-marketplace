@@ -90,11 +90,11 @@ export class MockBackend {
     return `"${createHash('sha256').update(content).digest('hex')}"`;
   }
 
-  findMissingFiles(manifest) {
+  findMissingFiles(manifest, includeDeferred = false) {
     const missing = [];
     if (!manifest || !Array.isArray(manifest.contents)) return missing;
     for (const item of manifest.contents) {
-      if (!item || item.defer_missing === true || !Array.isArray(item.discs)) continue;
+      if (!item || (!includeDeferred && item.defer_missing === true) || !Array.isArray(item.discs)) continue;
       for (const disc of item.discs) {
         if (!disc || !Array.isArray(disc.files)) continue;
         for (const file of disc.files) {
@@ -107,12 +107,13 @@ export class MockBackend {
     return missing;
   }
 
-  // Mirrors the public /api/games cards (minimal fields): games not deferred and with a known platform.
+  // Mirrors the public /api/games cards (minimal fields): available games with a known platform.
   publicGames() {
     const manifest = JSON.parse(this.text);
     const platforms = new Map(manifest.platforms.map(platform => [platform.id, platform]));
+    const missingIds = new Set(this.findMissingFiles(manifest, true).map(file => file.id));
     return manifest.contents
-      .filter(item => item.defer_missing !== true && platforms.has(item.platform_id))
+      .filter(item => !missingIds.has(item.id) && platforms.has(item.platform_id))
       .map(item => ({ id: item.id, canonical_name: item.canonical_name, platform: platforms.get(item.platform_id) }));
   }
 

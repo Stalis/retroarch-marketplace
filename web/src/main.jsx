@@ -15,7 +15,7 @@ async function fetchServed() {
       if (!response.ok) throw new Error(url);
       return response.json();
     }));
-    const counts = {};
+    const counts = Object.create(null);
     for (const game of games) counts[game.platform.libretro_name] = (counts[game.platform.libretro_name] || 0) + 1;
     return { platforms: platforms.map(platform => platform.libretro_name), counts };
   } catch { return null; }

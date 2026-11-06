@@ -201,14 +201,14 @@ func (s *Server) serveAdmin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "cannot write temporary manifest: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	items, _, err := content.Inspect(name)
+	snapshot, _, err := content.Inspect(name)
 	if err != nil {
 		http.Error(w, "invalid manifest: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 	approved := make(map[content.MissingSource]bool)
 	if previous, _, inspectErr := content.Inspect(s.catalogPath); inspectErr == nil {
-		for _, item := range previous {
+		for _, item := range previous.Items {
 			if item.DeferMissing {
 				for _, missing := range item.Missing {
 					approved[missing] = true
@@ -218,7 +218,7 @@ func (s *Server) serveAdmin(w http.ResponseWriter, r *http.Request) {
 	}
 	var missing []content.MissingSource
 	affected := make(map[string]bool)
-	for _, item := range items {
+	for _, item := range snapshot.Items {
 		for _, source := range item.Missing {
 			if !item.DeferMissing || !approved[source] {
 				missing = append(missing, source)

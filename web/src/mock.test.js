@@ -136,3 +136,42 @@ test('mock backend simulates 422 for missing files and accepts allow_missing=1',
     server.close();
   }
 });
+
+test('mock public games include deferred games only when their files are available', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const getRes = await fetch(`${baseUrl}/api/admin/manifest`);
+    const manifest = await getRes.json();
+    const deferred = manifest.contents.find(item => item.id === 'unreleased-prototype');
+    deferred.discs.push({
+      entrypoint: 'extra.bin',
+      files: [{ source: 'Genesis/absent/extra.bin', path: 'extra.bin' }]
+    });
+    deferred.discs[0].files[0].source = 'Genesis/proto.bin';
+
+    const save = async (etag) => fetch(`${baseUrl}/api/admin/manifest`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'If-Match': etag },
+      body: JSON.stringify(manifest)
+    });
+    const gameIds = async () => (await (await fetch(`${baseUrl}/api/games`)).json()).map(game => game.id);
+
+    let saved = await save(getRes.headers.get('ETag'));
+    assert.equal(saved.status, 204);
+    assert.ok(!(await gameIds()).includes(deferred.id));
+
+    deferred.discs[1].files[0].source = 'Genesis/extra.bin';
+    saved = await save(saved.headers.get('ETag'));
+    assert.equal(saved.status, 204);
+    assert.ok((await gameIds()).includes(deferred.id));
+
+    deferred.discs[0].files[0].source = 'Genesis/missing/proto.bin';
+    saved = await save(saved.headers.get('ETag'));
+    assert.equal(saved.status, 204);
+    const ids = await gameIds();
+    assert.ok(!ids.includes(deferred.id));
+    assert.ok(ids.includes('kings-field'));
+  } finally {
+    server.close();
+  }
+});

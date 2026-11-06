@@ -52,6 +52,8 @@ docker run -d \
    - For disc games (PlayStation, Saturn): specify the `.cue` entrypoint and associated `.bin` tracks. Multi-disc games can have `.m3u` playlists generated automatically.
 4. Click **Save** in the top right corner.
 
+Games saved with missing files are published automatically when those files become available. The platform list shows the number of currently published games.
+
 > 💡 **Tip:** If you have many games, you can ask an AI assistant to scan your game folder and generate the catalog automatically using our built-in [AI Agent Skill](#-automatic-catalog-generation-with-ai).
 
 ---

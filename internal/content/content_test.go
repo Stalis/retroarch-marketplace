@@ -42,6 +42,34 @@ func sourceFixture(t *testing.T, manifest string) (string, string, string) {
 	return dir, filepath.Join(dir, "source.json"), filepath.Join(dir, "output")
 }
 
+func TestSnapshotRetainsValidatedPlatforms(t *testing.T) {
+	manifest := strings.Replace(sourceManifest,
+		`"platforms":[{"id":"psx","name":"PlayStation","libretro_name":"Sony - PlayStation"}]`,
+		`"platforms":[{"id":"psx","name":"PlayStation","libretro_name":"Sony - PlayStation"},{"id":"duplicate","name":"Duplicate","libretro_name":"Sony - PlayStation"},{"id":"empty","name":"Empty","libretro_name":"Empty"}]`, 1)
+	_, source, _ := sourceFixture(t, manifest)
+	for _, load := range []struct {
+		name string
+		fn   func(string) (*Snapshot, string, error)
+	}{{"Load", Load}, {"Inspect", Inspect}} {
+		t.Run(load.name, func(t *testing.T) {
+			if err := os.WriteFile(source, []byte(manifest), 0600); err != nil {
+				t.Fatal(err)
+			}
+			snapshot, _, err := load.fn(source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(source, []byte(`{"platforms":[],"contents":[]}`), 0600); err != nil {
+				t.Fatal(err)
+			}
+			want := []Platform{{ID: "psx", Name: "PlayStation", LibretroName: "Sony - PlayStation"}, {ID: "empty", Name: "Empty", LibretroName: "Empty"}}
+			if !reflect.DeepEqual(snapshot.Platforms, want) || len(snapshot.Items) != 2 || snapshot.Items[0].card.Platform != want[0] {
+				t.Fatalf("snapshot does not retain validated manifest: %+v", snapshot)
+			}
+		})
+	}
+}
+
 func archiveFiles(t *testing.T, name string) map[string]string {
 	t.Helper()
 	z, err := zip.OpenReader(name)
@@ -75,10 +103,11 @@ func archiveFiles(t *testing.T, name string) map[string]string {
 
 func TestSingleAndMultiDisc(t *testing.T) {
 	dir, source, output := sourceFixture(t, sourceManifest)
-	items, _, err := Load(source)
+	snapshot, _, err := Load(source)
 	if err != nil {
 		t.Fatal(err)
 	}
+	items := snapshot.Items
 	var cards []struct {
 		ID            string `json:"id"`
 		CanonicalName string `json:"canonical_name"`
@@ -214,11 +243,11 @@ func TestAcceptsSymlinkedSource(t *testing.T) {
 	if err := os.Symlink("original.cue", filepath.Join(dir, "one.cue")); err != nil {
 		t.Fatal(err)
 	}
-	items, _, err := Load(source)
+	snapshot, _, err := Load(source)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := items[0].WriteZIP(output); err != nil {
+	if err := snapshot.Items[0].WriteZIP(output); err != nil {
 		t.Fatal(err)
 	}
 	files := archiveFiles(t, output)
@@ -284,10 +313,11 @@ func TestInspectDeferredMissing(t *testing.T) {
 	manifest = strings.Replace(manifest, `"source":"one.cue"`, `"source":"absent/one.cue"`, 1)
 	manifest = strings.Replace(manifest, `"source":"one.bin"`, `"source":"absent/one.bin"`, 1)
 	dir, source, _ := sourceFixture(t, manifest)
-	items, missingFingerprint, err := Load(source)
+	snapshot, missingFingerprint, err := Load(source)
 	if err != nil {
 		t.Fatal(err)
 	}
+	items := snapshot.Items
 	want := []MissingSource{{ID: "single", Path: "absent/one.cue"}, {ID: "single", Path: "absent/one.bin"}}
 	if items[0].Available || !items[0].DeferMissing || !reflect.DeepEqual(items[0].Missing, want) || !items[1].Available {
 		t.Fatalf("unexpected availability: %+v", items)
@@ -300,8 +330,12 @@ func TestInspectDeferredMissing(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	items, availableFingerprint, err := Load(source)
-	if err != nil || !items[0].Available || len(items[0].Missing) != 0 || missingFingerprint == availableFingerprint {
+	snapshot, availableFingerprint, err := Load(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items = snapshot.Items
+	if !items[0].Available || len(items[0].Missing) != 0 || missingFingerprint == availableFingerprint {
 		t.Fatalf("activation: items=%+v fingerprint changed=%v err=%v", items, missingFingerprint != availableFingerprint, err)
 	}
 }
@@ -309,9 +343,9 @@ func TestInspectDeferredMissing(t *testing.T) {
 func TestInspectUnapprovedAndInvalidMissing(t *testing.T) {
 	manifest := strings.Replace(sourceManifest, `"source":"one.bin"`, `"source":"missing/file"`, 1)
 	_, source, _ := sourceFixture(t, manifest)
-	items, _, err := Inspect(source)
-	if err != nil || items[0].Available || !reflect.DeepEqual(items[0].Missing, []MissingSource{{ID: "single", Path: "missing/file"}}) {
-		t.Fatalf("inspection: %+v, %v", items, err)
+	snapshot, _, err := Inspect(source)
+	if err != nil || snapshot.Items[0].Available || !reflect.DeepEqual(snapshot.Items[0].Missing, []MissingSource{{ID: "single", Path: "missing/file"}}) {
+		t.Fatalf("inspection: %+v, %v", snapshot, err)
 	}
 	if _, _, err := Load(source); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("unapproved missing: %v", err)

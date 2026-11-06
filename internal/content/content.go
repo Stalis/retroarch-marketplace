@@ -15,7 +15,7 @@ import (
 	"strings"
 )
 
-type platform struct {
+type Platform struct {
 	ID           string `json:"id"`
 	Name         string `json:"name"`
 	LibretroName string `json:"libretro_name"`
@@ -42,7 +42,7 @@ type content struct {
 }
 
 type manifest struct {
-	Platforms []platform `json:"platforms"`
+	Platforms []Platform `json:"platforms"`
 	Contents  []content  `json:"contents"`
 }
 
@@ -50,7 +50,7 @@ type card struct {
 	ID            string   `json:"id"`
 	CanonicalName string   `json:"canonical_name"`
 	DisplayName   *string  `json:"display_name,omitempty"`
-	Platform      platform `json:"platform"`
+	Platform      Platform `json:"platform"`
 	Entrypoint    string   `json:"entrypoint"`
 	Files         []string `json:"files"`
 	DownloadURL   string   `json:"download_url"`
@@ -70,6 +70,11 @@ type Item struct {
 	card         card
 	files        []sourceFile
 	playlist     string
+}
+
+type Snapshot struct {
+	Items     []Item
+	Platforms []Platform
 }
 
 func safePath(s string, component bool) bool {
@@ -134,48 +139,21 @@ func scanJSON(d *json.Decoder) error {
 	return err
 }
 
-func Load(source string) ([]Item, string, error) {
-	items, fingerprint, err := Inspect(source)
+func Load(source string) (*Snapshot, string, error) {
+	snapshot, fingerprint, err := Inspect(source)
 	if err != nil {
 		return nil, "", err
 	}
-	for _, item := range items {
+	for _, item := range snapshot.Items {
 		if !item.DeferMissing && len(item.Missing) != 0 {
 			return nil, "", fmt.Errorf("source %q: %w", item.Missing[0].Path, os.ErrNotExist)
 		}
 	}
-	return items, fingerprint, nil
-}
-
-// Platforms returns the manifest's platforms as protocol JSON objects, unique by libretro_name (first wins).
-// Call after Load/Inspect has validated the manifest.
-func Platforms(source string) ([]json.RawMessage, error) {
-	data, err := os.ReadFile(source)
-	if err != nil {
-		return nil, err
-	}
-	var m manifest
-	if err := json.Unmarshal(data, &m); err != nil {
-		return nil, fmt.Errorf("source JSON: %w", err)
-	}
-	seen := map[string]bool{}
-	result := make([]json.RawMessage, 0, len(m.Platforms))
-	for _, p := range m.Platforms {
-		if seen[p.LibretroName] {
-			continue
-		}
-		seen[p.LibretroName] = true
-		raw, err := json.Marshal(p)
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, raw)
-	}
-	return result, nil
+	return snapshot, fingerprint, nil
 }
 
 // Inspect validates the manifest and reports missing sources without approving them.
-func Inspect(source string) ([]Item, string, error) {
+func Inspect(source string) (*Snapshot, string, error) {
 	source, err := filepath.Abs(source)
 	if err != nil {
 		return nil, "", err
@@ -202,7 +180,9 @@ func Inspect(source string) ([]Item, string, error) {
 	if m.Platforms == nil || m.Contents == nil {
 		return nil, "", errors.New("platforms and contents must be arrays")
 	}
-	platforms := map[string]platform{}
+	platforms := map[string]Platform{}
+	uniquePlatforms := make([]Platform, 0, len(m.Platforms))
+	seen := map[string]bool{}
 	for _, p := range m.Platforms {
 		if !safePath(p.ID, true) || !validText(p.Name) || !safePath(p.LibretroName, true) {
 			return nil, "", fmt.Errorf("invalid platform %q", p.ID)
@@ -211,6 +191,10 @@ func Inspect(source string) ([]Item, string, error) {
 			return nil, "", fmt.Errorf("duplicate platform %q", p.ID)
 		}
 		platforms[p.ID] = p
+		if !seen[p.LibretroName] {
+			seen[p.LibretroName] = true
+			uniquePlatforms = append(uniquePlatforms, p)
+		}
 	}
 	ids := map[string]bool{}
 	result := make([]Item, 0, len(m.Contents))
@@ -294,7 +278,7 @@ func Inspect(source string) ([]Item, string, error) {
 		}
 		result = append(result, item)
 	}
-	return result, fmt.Sprintf("%x", hash.Sum(nil)), nil
+	return &Snapshot{Items: result, Platforms: uniquePlatforms}, fmt.Sprintf("%x", hash.Sum(nil)), nil
 }
 
 func (item Item) WriteZIP(filename string) (err error) {

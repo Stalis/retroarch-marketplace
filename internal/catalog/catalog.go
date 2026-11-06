@@ -32,7 +32,7 @@ type game struct {
 type catalogSnapshot struct {
 	fingerprint string
 	games       []game
-	platforms   []json.RawMessage // every manifest platform, unique by libretro_name
+	platforms   []content.Platform // every manifest platform, unique by libretro_name
 	packages    map[string]content.Item
 	assets      map[string]assetRoute
 }
@@ -181,7 +181,7 @@ func (s *Server) load() (*catalogSnapshot, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// shortcut: same-size edits preserving mtime are invisible; hash file contents if that must be detected.
-	items, fingerprint, err := content.Load(s.catalogPath)
+	source, fingerprint, err := content.Load(s.catalogPath)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: %w", err)
 	}
@@ -190,13 +190,11 @@ func (s *Server) load() (*catalogSnapshot, error) {
 	}
 	snapshot := &catalogSnapshot{
 		fingerprint: fingerprint,
-		games:       make([]game, 0, len(items)),
-		packages:    make(map[string]content.Item, len(items)),
+		games:       make([]game, 0, len(source.Items)),
+		platforms:   source.Platforms,
+		packages:    make(map[string]content.Item, len(source.Items)),
 	}
-	if snapshot.platforms, err = content.Platforms(s.catalogPath); err != nil {
-		return nil, fmt.Errorf("catalog: %w", err)
-	}
-	for i, item := range items {
+	for i, item := range source.Items {
 		if !item.Available {
 			continue
 		}
