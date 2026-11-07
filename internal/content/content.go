@@ -215,16 +215,32 @@ func Inspect(source string) (*Snapshot, string, error) {
 		}
 		item := Item{ID: c.ID, Available: true, DeferMissing: c.DeferMissing, card: card{ID: c.ID, CanonicalName: c.CanonicalName, DisplayName: c.DisplayName, Platform: p, DownloadURL: "packages/" + url.PathEscape(c.ID) + ".zip"}}
 		paths := map[string]bool{}
+		addPath := func(name string) bool {
+			if _, exists := paths[name]; exists {
+				return false
+			}
+			for i := 0; i < len(name); i++ {
+				if name[i] == '/' && paths[name[:i]] {
+					return false
+				}
+			}
+			for i := 0; i < len(name); i++ {
+				if name[i] == '/' {
+					paths[name[:i]] = false
+				}
+			}
+			paths[name] = true
+			return true
+		}
 		for _, disc := range c.Discs {
 			if !safePath(disc.Entrypoint, false) || len(disc.Files) == 0 {
 				return nil, "", fmt.Errorf("invalid disc in %q", c.ID)
 			}
 			found := false
 			for _, f := range disc.Files {
-				if !safePath(f.Path, false) || paths[f.Path] || !safePath(f.Source, false) {
+				if !safePath(f.Path, false) || !safePath(f.Source, false) || !addPath(f.Path) {
 					return nil, "", fmt.Errorf("invalid or duplicate file in %q: %q", c.ID, f.Path)
 				}
-				paths[f.Path] = true
 				if f.Path == disc.Entrypoint {
 					found = true
 				}
@@ -253,7 +269,7 @@ func Inspect(source string) (*Snapshot, string, error) {
 		}
 		item.card.Entrypoint = c.Discs[0].Entrypoint
 		if c.Playlist != nil {
-			if !safePath(*c.Playlist, false) || paths[*c.Playlist] {
+			if !safePath(*c.Playlist, false) || !addPath(*c.Playlist) {
 				return nil, "", fmt.Errorf("invalid or duplicate playlist %q", *c.Playlist)
 			}
 			var lines []string

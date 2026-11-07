@@ -41,6 +41,10 @@ type Server struct {
 	scanErr                  error
 	cacheMu                  sync.Mutex
 	active                   map[string]int
+	builds                   map[string]*archiveBuild
+	writeZIP                 func(content.Item, string) error
+	assetsMu                 sync.Mutex
+	assetsFetch              *assetsFlight
 }
 
 var gameFields = map[string]bool{"id": true, "canonical_name": true, "display_name": true, "platform": true, "entrypoint": true, "files": true, "download_url": true, "boxart_url": true}
@@ -214,58 +218,67 @@ func New(catalogPath, packagesDir string) (*Server, error) {
 	return s, nil
 }
 
-// archiveLocked must be called with cacheMu held.
-func (s *Server) archiveLocked(fingerprint string, item content.Item) (string, error) {
+// prepareArchive must be called with cacheMu held.
+func (s *Server) prepareArchive(fingerprint string, item content.Item) (string, bool, error) {
 	if err := os.MkdirAll(s.packagesDir, 0755); err != nil {
-		return "", err
+		return "", false, err
 	}
 	info, err := os.Lstat(s.packagesDir)
 	if err != nil || !info.IsDir() {
-		return "", errors.New("package cache root is not a directory")
+		return "", false, errors.New("package cache root is not a directory")
 	}
 	dir := filepath.Join(s.packagesDir, ".cache")
 	if err := os.Mkdir(dir, 0755); err != nil && !os.IsExist(err) {
-		return "", err
+		return "", false, err
 	}
 	info, err = os.Lstat(dir)
 	if err != nil || !info.IsDir() {
-		return "", errors.New("package cache is not a directory")
+		return "", false, errors.New("package cache is not a directory")
 	}
 	idHash := sha256.Sum256([]byte(item.ID))
 	path := filepath.Join(dir, fmt.Sprintf("%s-%x.zip", fingerprint, idHash))
 	info, err = os.Lstat(path)
 	if err == nil {
 		if !info.Mode().IsRegular() {
-			return "", errors.New("cached package is not a regular file")
+			return "", false, errors.New("cached package is not a regular file")
 		}
-		return path, nil
+		return path, true, nil
 	}
 	if !os.IsNotExist(err) {
-		return "", err
+		return "", false, err
 	}
+	return path, false, nil
+}
+
+func (s *Server) buildArchive(path, fingerprint string, item content.Item) (string, error) {
+	dir := filepath.Dir(path)
 	temp, err := os.CreateTemp(dir, ".building-")
 	if err != nil {
 		return "", err
 	}
 	tempPath := temp.Name()
-	defer os.Remove(tempPath)
 	if err := temp.Close(); err != nil {
+		os.Remove(tempPath)
 		return "", err
 	}
-	if err := item.WriteZIP(tempPath); err != nil {
+	writeZIP := item.WriteZIP
+	if s.writeZIP != nil {
+		writeZIP = func(path string) error { return s.writeZIP(item, path) }
+	}
+	if err := writeZIP(tempPath); err != nil {
+		os.Remove(tempPath)
 		return "", err
 	}
 	current, err := s.load()
 	if err != nil {
+		os.Remove(tempPath)
 		return "", err
 	}
 	if current.fingerprint != fingerprint {
+		os.Remove(tempPath)
 		return "", errors.New("catalog changed while creating package")
 	}
-	if err := os.Rename(tempPath, path); err != nil {
-		return "", err
-	}
-	return path, nil
+	return tempPath, nil
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {

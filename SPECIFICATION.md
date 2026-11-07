@@ -10,7 +10,7 @@ This document records the current product contract inferred from [README.md](REA
 
 - A **manifest** is the authoritative JSON document containing `platforms` and `contents` arrays. Source paths are relative to the manifest directory; archive paths are relative to the archive root.
 - A **platform** has an `id`, a human-readable `name`, and a `libretro_name`. Platform IDs are unique in a manifest. A game references a platform by its ID. Several platform IDs may share a `libretro_name`.
-- A **game** has a unique `id`, `canonical_name`, optional `display_name`, `platform_id`, and one or more ordered discs. Each disc has an `entrypoint` and a nonempty list of files, each with a source path and an archive path. Each disc's entrypoint must be one of its file paths; archive paths are unique across the game.
+- A **game** has a unique `id`, `canonical_name`, optional `display_name`, `platform_id`, and one or more ordered discs. Each disc has an `entrypoint` and a nonempty list of files, each with a source path and an archive path. Each disc's entrypoint must be one of its file paths; archive paths and the playlist must be unique across the game, and no such path may be an ancestor of another. Existing manifests with conflicting paths must be corrected before use.
 - A game with multiple discs requires a `playlist` path. When a playlist is specified, the server generates an M3U containing disc entrypoints in disc order, relative to the playlist directory. The playlist is the game card's entrypoint and is included in its files. Otherwise, the first disc entrypoint is used.
 - A game is **available** only when all its sources exist and are regular files. A game with missing sources may be retained with `defer_missing: true`; it is excluded from the published catalog until all sources become available. Missing sources on a game without that flag make the manifest invalid for serving. Other source errors and invalid paths remain errors.
 - Paths and identifiers used in archives must satisfy the path-safety constraints in OpenAPI. The manifest must not contain duplicate JSON members, unknown fields, or unsafe paths. Source files and disc data must never be modified by the application.
@@ -23,9 +23,13 @@ The application catalog handlers (`internal/catalog/customapi.go`) and the Retro
 
 1. `GET /api/games` returns available games as a JSON array. Search and platform filters combine with AND; pagination is applied after filtering. Each card describes the exact files in its package.
 2. `GET /api/platforms` returns declared platforms, including platforms without available games, in manifest order. For repeated `libretro_name` values, only the first platform is returned.
-3. A card's `download_url` resolves to a lazily generated, cached ZIP containing exactly the card's listed files. Generated playlists are included where applicable.
+3. A card's `download_url` resolves to a lazily generated, cached ZIP containing exactly the card's listed files. Generated playlists are included where applicable. Concurrent requests for one archive share its build; unrelated archives can build or download independently, and active archives are protected from cache cleanup.
 4. The `/assets/cores/` indexes and ZIP endpoints support RetroArch Content Downloader. Asset ZIP contents are nested under a game subdirectory to avoid overwriting sibling games on extraction.
 5. An invalid manifest must not result in a stale successful catalog response. A valid manifest change or source availability change must be reflected in subsequent catalog requests.
+
+Frontend asset bundle requests share a bounded upstream download; a failed download falls back to the existing placeholder and later requests may retry.
+
+The HTTP server limits request-header reads to five seconds without imposing a response write timeout, allowing long archive downloads.
 
 ## Administration
 

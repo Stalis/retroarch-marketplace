@@ -40,11 +40,22 @@ docker run -d \
   ghcr.io/stalis/retroarch-marketplace:latest
 ```
 
+For admin access, use one of these two supported options:
+
+- **Linux host networking:** replace `-p 5050:5050` with `--network host`, then open `http://127.0.0.1:5050/admin/` on the Docker host.
+- **Bridge networking or Docker Desktop:** install `socat` on the host and run this local tunnel while using the dashboard:
+  ```sh
+  socat TCP-LISTEN:5051,bind=127.0.0.1,reuseaddr,fork EXEC:'docker exec -i retroarch-catalog nc 127.0.0.1 5050'
+  ```
+  Open `http://127.0.0.1:5051/admin/` on the host. The `nc` command runs inside the Alpine container.
+
+The normal published port returns 403 for admin requests because bridge connections do not reach the server from container loopback. The tunnel is deliberately bound to host loopback; do not expose it to the LAN or run a second server against the same data.
+
 ---
 
 ### Step 2: Add Your Games in the Web Dashboard
 
-1. Open your browser and go to: **[http://127.0.0.1:5050/admin/](http://127.0.0.1:5050/admin/)**
+1. Open **[http://127.0.0.1:5050/admin/](http://127.0.0.1:5050/admin/)** for a standalone server or Linux host networking, or **[http://127.0.0.1:5051/admin/](http://127.0.0.1:5051/admin/)** when using the Docker bridge tunnel above.
 2. **Add a Platform**: choose a console from the list of 80+ standard Libretro systems (e.g. *Sony - PlayStation*, *Super Nintendo Entertainment System*, *Sega - Mega Drive - Genesis*).
 3. **Add Games**:
    - Enter game title.
@@ -53,6 +64,8 @@ docker run -d \
 4. Click **Save** in the top right corner.
 
 Games saved with missing files are published automatically when those files become available. The platform list shows the number of currently published games.
+
+The dashboard warns before discarding an unfinished game draft when reloading or leaving the page.
 
 > 💡 **Tip:** If you have many games, you can ask an AI assistant to scan your game folder and generate the catalog automatically using our built-in [AI Agent Skill](#-automatic-catalog-generation-with-ai).
 
@@ -69,6 +82,8 @@ Games saved with missing files are published automatically when those files beco
 3. In RetroArch main menu, open:  
    **Online Updater → Content Downloader**
 4. Pick your platform and download your games! They extract into your RetroArch download directory ready to launch.
+
+Games with colliding names receive distinct generated download names and extraction directories; existing non-colliding names remain unchanged.
 
 ---
 
@@ -110,6 +125,8 @@ The server works out of the box with zero configuration. For advanced setups, yo
 | Scan interval | `-scan-interval` | `RETRO_SCAN_INTERVAL` | `10m` | How often to re-stat source files |
 | Cleanup interval| `-cleanup-interval` | `RETRO_CLEANUP_INTERVAL` | `1h` | Cache cleaner frequency |
 | Cache max age | `-cache-max-age` | `RETRO_CACHE_MAX_AGE` | `24h` | How long to keep generated ZIPs |
+
+When the default manifest path is not configured explicitly and the file is absent, the server creates an empty catalog on first startup. Explicitly configured missing manifests remain errors.
 
 Check installed version at any time:
 ```sh

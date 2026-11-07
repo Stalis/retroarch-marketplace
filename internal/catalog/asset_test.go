@@ -3,15 +3,22 @@ package catalog
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"os"
 	"path"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func assetLabel(s string) string {
@@ -222,13 +229,118 @@ func TestAssetCaseCollisions(t *testing.T) {
 		t.Fatalf("case-colliding categories %q, want %q", got, wantCategories)
 	}
 	base := "/assets/cores/" + url.PathEscape(wantCategories[0]) + "/"
-	wantGames := []string{assetLabel("Game") + ".zip", assetLabel("game") + ".zip"}
+	wantGames := []string{assetLabel("Game") + "-47616d65.zip", assetLabel("game") + "-67616d65.zip"}
 	if got := assetIndex(t, h, base+".index"); !reflect.DeepEqual(got, wantGames) {
 		t.Fatalf("case-colliding games %q, want %q", got, wantGames)
 	}
 	for _, name := range wantGames {
 		if got := request(t, h, http.MethodGet, base+url.PathEscape(name)).Code; got != http.StatusOK {
 			t.Errorf("download %q: %d", name, got)
+		}
+	}
+}
+
+func TestAssetCollisionRoutesAndHTTP(t *testing.T) {
+	games := []game{
+		{id: "one", canonical: "Same", platform: "System"},
+		{id: "two", canonical: "Same", platform: "System"},
+		{id: "foo", canonical: "Other", platform: "System"},
+		{id: "FOO", canonical: "Another", platform: "System"},
+		{id: "third", canonical: "foo", platform: "System"},
+		{id: "fourth", canonical: "~53616d65-6f6e65", platform: "System"},
+	}
+	routes := assetRoutes(games)
+	base := "/assets/cores/System/"
+	index := strings.Split(strings.TrimSpace(routes[base+".index"].index), "\n")
+	if len(index) != len(games) {
+		t.Fatalf("index: %q", index)
+	}
+	seen := map[string]bool{}
+	for _, name := range index {
+		if seen[strings.ToLower(name)] {
+			t.Fatalf("duplicate index name %q", name)
+		}
+		seen[strings.ToLower(name)] = true
+	}
+	if routes[base+"foo.zip"].archive != "third" || routes[base+"Other.zip"].archive != "foo" || routes[base+"Another.zip"].archive != "FOO" {
+		t.Fatalf("primary routes overwritten: %v", routes)
+	}
+	if _, ok := routes[base+"FOO.zip"]; ok {
+		t.Fatal("ambiguous alias published")
+	}
+	for i, j := 0, len(games)-1; i < j; i, j = i+1, j-1 {
+		games[i], games[j] = games[j], games[i]
+	}
+	if reversed := assetRoutes(games); !reflect.DeepEqual(routes, reversed) {
+		t.Fatal("routes depend on input order")
+	}
+
+	var cards []map[string]interface{}
+	packages := make(map[string][]zipEntry)
+	for _, g := range games[:2] {
+		cards = append(cards, map[string]interface{}{
+			"id": g.id, "canonical_name": "Duplicate",
+			"platform":   map[string]string{"id": "p", "name": "Platform", "libretro_name": "System"},
+			"entrypoint": "file.txt", "files": []string{"file.txt"}, "download_url": "original.zip",
+		})
+		packages[g.id] = []zipEntry{{name: "file.txt", data: g.id}}
+	}
+	manifest, err := json.Marshal(cards)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, dir := fixture(t, string(manifest), packages)
+	handler, err := New(source, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	resp, err := http.Get(server.URL + base + ".index")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("index: %s %v", body, err)
+	}
+	entries := strings.Split(strings.TrimSpace(string(body)), "\n")
+	if len(entries) != 2 || strings.EqualFold(entries[0], entries[1]) {
+		t.Fatalf("index %q", entries)
+	}
+	found := map[string]bool{}
+	for _, entry := range entries {
+		resp, err := http.Get(server.URL + base + url.PathEscape(entry))
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil || resp.StatusCode != http.StatusOK {
+			t.Fatalf("zip: %v %s", err, resp.Status)
+		}
+		zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+		if err != nil || len(zr.File) != 1 {
+			t.Fatalf("zip: %v", err)
+		}
+		if zr.File[0].Name != strings.TrimSuffix(entry, ".zip")+"/file.txt" {
+			t.Fatal(zr.File[0].Name)
+		}
+		r, err := zr.File[0].Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		content, err := io.ReadAll(r)
+		r.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		found[string(content)] = true
+	}
+	for _, g := range games[:2] {
+		if !found[g.id] {
+			t.Fatalf("missing content %q", g.id)
 		}
 	}
 }
@@ -287,5 +399,250 @@ func TestAssetAssetsZip(t *testing.T) {
 		if len(zr.File) == 0 {
 			t.Fatalf("GET %s: empty zip", target)
 		}
+	}
+}
+
+func TestAssetsFetchLimitsAndRetry(t *testing.T) {
+	body := "12345"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.(http.Flusher).Flush()
+		_, _ = w.Write([]byte(body))
+	}))
+	defer upstream.Close()
+	old := UpstreamAssetsURL
+	UpstreamAssetsURL = upstream.URL
+	defer func() { UpstreamAssetsURL = old }()
+	_, packages := fixture(t, "[]", nil)
+	s := &Server{packagesDir: packages}
+	if err := s.fetchAssets(context.Background(), 4); err == nil {
+		t.Fatal("accepted oversized response")
+	}
+	if _, err := os.Stat(filepath.Join(packages, ".cache", "assets.zip")); !os.IsNotExist(err) {
+		t.Fatalf("partial cache: %v", err)
+	}
+	body = "1234"
+	if err := s.fetchAssets(context.Background(), 4); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(packages, ".cache", "assets.zip"))
+	if err != nil || string(data) != body {
+		t.Fatalf("cache %q: %v", data, err)
+	}
+}
+
+func TestAssetsSharedHTTP(t *testing.T) {
+	var bundle bytes.Buffer
+	zw := zip.NewWriter(&bundle)
+	member, err := zw.Create("asset.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := member.Write([]byte("asset")); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	started, release := make(chan struct{}), make(chan struct{})
+	var calls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			close(started)
+		}
+		select {
+		case <-release:
+			_, _ = w.Write(bundle.Bytes())
+		case <-r.Context().Done():
+		}
+	}))
+	defer upstream.Close()
+	old := UpstreamAssetsURL
+	UpstreamAssetsURL = upstream.URL
+	defer func() { UpstreamAssetsURL = old }()
+	manifest, packages := fixture(t, "[]", nil)
+	s, err := New(manifest, packages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(s)
+	defer server.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "GET", server.URL+"/assets/assets.zip", nil)
+	first := make(chan error, 1)
+	go func() {
+		resp, err := http.DefaultClient.Do(req)
+		if resp != nil {
+			resp.Body.Close()
+		}
+		first <- err
+	}()
+	<-started
+	second := make(chan []byte, 1)
+	go func() {
+		resp, err := http.Get(server.URL + "/assets/frontend/assets.zip")
+		if err != nil {
+			second <- nil
+			return
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		second <- b
+	}()
+	third := make(chan []byte, 1)
+	go func() {
+		resp, err := http.Get(server.URL + "/assets/assets.zip")
+		if err != nil {
+			third <- nil
+			return
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		third <- b
+	}()
+	deadline := time.After(5 * time.Second)
+	for {
+		s.assetsMu.Lock()
+		n := s.assetsFetch.waiters
+		s.assetsMu.Unlock()
+		if n == 3 {
+			break
+		}
+		select {
+		case <-deadline:
+			close(release)
+			t.Fatal("second waiter did not join")
+		default:
+			runtime.Gosched()
+		}
+	}
+	cancel()
+	if err := <-first; err == nil {
+		t.Fatal("cancelled request succeeded")
+	}
+	close(release)
+	if got := <-second; !bytes.Equal(got, bundle.Bytes()) {
+		t.Fatalf("bundle %q", got)
+	}
+	if got := <-third; !bytes.Equal(got, bundle.Bytes()) {
+		t.Fatalf("second bundle %q", got)
+	}
+	resp, err := http.Get(server.URL + "/assets/assets.zip")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil || !bytes.Equal(data, bundle.Bytes()) || calls.Load() != 1 {
+		t.Fatalf("cache %q calls %d: %v", data, calls.Load(), err)
+	}
+}
+
+func TestAssetsAllCancelledThenRetry(t *testing.T) {
+	started, cancelled := make(chan struct{}), make(chan struct{})
+	var calls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			close(started)
+			<-r.Context().Done()
+			close(cancelled)
+			return
+		}
+		_, _ = w.Write([]byte("retry"))
+	}))
+	defer upstream.Close()
+	old := UpstreamAssetsURL
+	UpstreamAssetsURL = upstream.URL
+	defer func() { UpstreamAssetsURL = old }()
+	_, packages := fixture(t, "[]", nil)
+	s := &Server{packagesDir: packages}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { s.waitAssets(ctx); close(done) }()
+	<-started
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	done2 := make(chan struct{})
+	go func() { s.waitAssets(ctx2); close(done2) }()
+	deadline := time.After(5 * time.Second)
+	for {
+		s.assetsMu.Lock()
+		n := s.assetsFetch.waiters
+		s.assetsMu.Unlock()
+		if n == 2 {
+			break
+		}
+		select {
+		case <-deadline:
+			cancel()
+			cancel2()
+			t.Fatal("second waiter did not join")
+		default:
+			runtime.Gosched()
+		}
+	}
+	cancel()
+	<-done
+	cancel2()
+	<-done2
+	select {
+	case <-cancelled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("upstream not cancelled")
+	}
+	s.waitAssets(context.Background())
+	data, err := os.ReadFile(filepath.Join(packages, ".cache", "assets.zip"))
+	if err != nil || string(data) != "retry" || calls.Load() != 2 {
+		t.Fatalf("retry %q calls %d: %v", data, calls.Load(), err)
+	}
+}
+
+func TestAssetsFetchFailures(t *testing.T) {
+	for _, mode := range []string{"status", "truncated", "publication"} {
+		t.Run(mode, func(t *testing.T) {
+			var retry atomic.Bool
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if retry.Load() {
+					_, _ = w.Write([]byte("retry"))
+					return
+				}
+				switch mode {
+				case "status":
+					w.WriteHeader(http.StatusBadGateway)
+				case "truncated":
+					w.Header().Set("Content-Length", "20")
+					_, _ = w.Write([]byte("short"))
+				default:
+					_, _ = w.Write([]byte("valid"))
+				}
+			}))
+			defer upstream.Close()
+			old := UpstreamAssetsURL
+			UpstreamAssetsURL = upstream.URL
+			defer func() { UpstreamAssetsURL = old }()
+			_, packages := fixture(t, "[]", nil)
+			s := &Server{packagesDir: packages}
+			dest := filepath.Join(packages, ".cache", "assets.zip")
+			if mode == "publication" {
+				if err := os.MkdirAll(dest, 0755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := s.fetchAssets(context.Background(), 100); err == nil {
+				t.Fatal("expected failure")
+			}
+			if mode == "publication" {
+				if err := os.Remove(dest); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if _, err := os.Stat(dest); !os.IsNotExist(err) {
+					t.Fatalf("partial file: %v", err)
+				}
+			}
+			retry.Store(true)
+			if err := s.fetchAssets(context.Background(), 100); err != nil {
+				t.Fatalf("retry: %v", err)
+			}
+		})
 	}
 }

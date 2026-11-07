@@ -68,6 +68,7 @@ function App() {
   const [missing, setMissing] = useState(null);
   const [serverVersion, setServerVersion] = useState('');
   const dirty = loaded && text !== savedText;
+  const gameDraftDirty = JSON.stringify(newGame) !== (gameReplacement ? gameReplacement.draft : JSON.stringify(blankGame()));
   const parsed = parseManifest(text);
   const manifest = parsed.value;
   const games = Array.isArray(manifest?.contents) ? manifest.contents : [];
@@ -79,15 +80,15 @@ function App() {
 
   useEffect(() => {
     function warn(event) {
-      if (dirty) { event.preventDefault(); event.returnValue = ''; }
+      if (dirty || gameDraftDirty) { event.preventDefault(); event.returnValue = ''; }
     }
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
-  }, [dirty]);
+  }, [dirty, gameDraftDirty]);
   useEffect(() => { setMissing(null); }, [text, etag, newGame]);
 
   async function load(confirmDiscard = true) {
-    if (confirmDiscard && dirty && !window.confirm(t.discard)) return;
+    if (confirmDiscard && (dirty || gameDraftDirty) && !window.confirm(t.discard)) return;
     setBusy(true); setError(''); setNotice(''); setMissing(null);
     const servedRequest = fetchServed();
     try {

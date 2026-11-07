@@ -12,12 +12,13 @@ import (
 )
 
 type config struct {
-	Listen          string
-	Catalog         string
-	Packages        string
-	ScanInterval    time.Duration
-	CleanupInterval time.Duration
-	CacheMaxAge     time.Duration
+	Listen             string
+	Catalog            string
+	Packages           string
+	ScanInterval       time.Duration
+	CleanupInterval    time.Duration
+	CacheMaxAge        time.Duration
+	initDefaultCatalog bool
 }
 
 var errVersion = errors.New("version requested")
@@ -32,7 +33,7 @@ type fileConfig struct {
 }
 
 func loadConfig(args []string, lookupEnv func(string) (string, bool)) (config, error) {
-	cfg := config{"127.0.0.1:5050", "catalog-source.json", "packages", 10 * time.Minute, time.Hour, 24 * time.Hour}
+	cfg := config{"127.0.0.1:5050", "catalog-source.json", "packages", 10 * time.Minute, time.Hour, 24 * time.Hour, false}
 	flags := flag.NewFlagSet("catalog-server", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	version := flags.Bool("version", false, "display version and exit")
@@ -144,5 +145,7 @@ func loadConfig(args []string, lookupEnv func(string) (string, bool)) (config, e
 	if err := apply(fileConfig{selected("listen", listen), selected("catalog", catalog), selected("packages", packages), selected("scan-interval", scan), selected("cleanup-interval", cleanup), selected("cache-max-age", maxAge)}); err != nil {
 		return cfg, err
 	}
+	_, envCatalog := lookupEnv("RETRO_CATALOG")
+	cfg.initDefaultCatalog = file.Catalog == nil && !envCatalog && !visited["catalog"]
 	return cfg, nil
 }

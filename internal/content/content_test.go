@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -40,6 +41,31 @@ func sourceFixture(t *testing.T, manifest string) (string, string, string) {
 		}
 	}
 	return dir, filepath.Join(dir, "source.json"), filepath.Join(dir, "output")
+}
+
+func TestArchivePathConflicts(t *testing.T) {
+	for _, tc := range []struct {
+		name, first, second, playlist string
+		valid                         bool
+	}{
+		{"parent first", "a", "a/b", "list.m3u", false},
+		{"child first", "a/b", "a", "list.m3u", false},
+		{"duplicate", "a", "a", "list.m3u", false},
+		{"playlist parent", "a/b", "c", "a", false},
+		{"playlist child", "a", "c", "a/b", false},
+		{"component prefix", "a", "ab/b", "list.m3u", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			manifest := fmt.Sprintf(`{"platforms":[{"id":"p","name":"P","libretro_name":"P"}],"contents":[{"id":"g","canonical_name":"G","platform_id":"p","playlist":%q,"discs":[{"entrypoint":%q,"files":[{"source":"one.cue","path":%q}]},{"entrypoint":%q,"files":[{"source":"two.cue","path":%q}]}]}]}`, tc.playlist, tc.first, tc.first, tc.second, tc.second)
+			_, source, _ := sourceFixture(t, manifest)
+			for _, fn := range []func(string) (*Snapshot, string, error){Inspect, Load} {
+				_, _, err := fn(source)
+				if (err == nil) != tc.valid {
+					t.Fatalf("valid=%v: %v", tc.valid, err)
+				}
+			}
+		})
+	}
 }
 
 func TestSnapshotRetainsValidatedPlatforms(t *testing.T) {

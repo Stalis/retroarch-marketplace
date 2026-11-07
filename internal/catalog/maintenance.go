@@ -48,18 +48,57 @@ func (s *Server) checkSources() error {
 	return err
 }
 
+type archiveBuild struct {
+	done chan struct{}
+	err  error
+}
+
 // The lease keeps a cache entry alive until the response has finished streaming.
 func (s *Server) archive(fingerprint string, item content.Item) (string, error) {
 	s.cacheMu.Lock()
-	defer s.cacheMu.Unlock()
-	path, err := s.archiveLocked(fingerprint, item)
+	path, ready, err := s.prepareArchive(fingerprint, item)
 	if err != nil {
+		s.cacheMu.Unlock()
 		return "", err
 	}
 	if s.active == nil {
 		s.active = make(map[string]int)
 	}
 	s.active[path]++
+	if ready {
+		s.cacheMu.Unlock()
+		return path, nil
+	}
+	if s.builds == nil {
+		s.builds = make(map[string]*archiveBuild)
+	}
+	build := s.builds[path]
+	if build != nil {
+		s.cacheMu.Unlock()
+		<-build.done
+		if build.err != nil {
+			s.releaseArchive(path)
+			return "", build.err
+		}
+		return path, nil
+	}
+	build = &archiveBuild{done: make(chan struct{})}
+	s.builds[path] = build
+	s.cacheMu.Unlock()
+	temp, err := s.buildArchive(path, fingerprint, item)
+	s.cacheMu.Lock()
+	if err == nil {
+		err = os.Rename(temp, path)
+		os.Remove(temp)
+	}
+	build.err = err
+	delete(s.builds, path)
+	close(build.done)
+	s.cacheMu.Unlock()
+	if err != nil {
+		s.releaseArchive(path)
+		return "", err
+	}
 	return path, nil
 }
 
