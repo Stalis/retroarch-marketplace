@@ -15,7 +15,7 @@ import (
 	"strings"
 )
 
-type platform struct {
+type Platform struct {
 	ID           string `json:"id"`
 	Name         string `json:"name"`
 	LibretroName string `json:"libretro_name"`
@@ -42,7 +42,7 @@ type content struct {
 }
 
 type manifest struct {
-	Platforms []platform `json:"platforms"`
+	Platforms []Platform `json:"platforms"`
 	Contents  []content  `json:"contents"`
 }
 
@@ -50,7 +50,7 @@ type card struct {
 	ID            string   `json:"id"`
 	CanonicalName string   `json:"canonical_name"`
 	DisplayName   *string  `json:"display_name,omitempty"`
-	Platform      platform `json:"platform"`
+	Platform      Platform `json:"platform"`
 	Entrypoint    string   `json:"entrypoint"`
 	Files         []string `json:"files"`
 	DownloadURL   string   `json:"download_url"`
@@ -70,6 +70,11 @@ type Item struct {
 	card         card
 	files        []sourceFile
 	playlist     string
+}
+
+type Snapshot struct {
+	Items     []Item
+	Platforms []Platform
 }
 
 func safePath(s string, component bool) bool {
@@ -134,21 +139,21 @@ func scanJSON(d *json.Decoder) error {
 	return err
 }
 
-func Load(source string) ([]Item, string, error) {
-	items, fingerprint, err := Inspect(source)
+func Load(source string) (*Snapshot, string, error) {
+	snapshot, fingerprint, err := Inspect(source)
 	if err != nil {
 		return nil, "", err
 	}
-	for _, item := range items {
+	for _, item := range snapshot.Items {
 		if !item.DeferMissing && len(item.Missing) != 0 {
 			return nil, "", fmt.Errorf("source %q: %w", item.Missing[0].Path, os.ErrNotExist)
 		}
 	}
-	return items, fingerprint, nil
+	return snapshot, fingerprint, nil
 }
 
 // Inspect validates the manifest and reports missing sources without approving them.
-func Inspect(source string) ([]Item, string, error) {
+func Inspect(source string) (*Snapshot, string, error) {
 	source, err := filepath.Abs(source)
 	if err != nil {
 		return nil, "", err
@@ -175,7 +180,9 @@ func Inspect(source string) ([]Item, string, error) {
 	if m.Platforms == nil || m.Contents == nil {
 		return nil, "", errors.New("platforms and contents must be arrays")
 	}
-	platforms := map[string]platform{}
+	platforms := map[string]Platform{}
+	uniquePlatforms := make([]Platform, 0, len(m.Platforms))
+	seen := map[string]bool{}
 	for _, p := range m.Platforms {
 		if !safePath(p.ID, true) || !validText(p.Name) || !safePath(p.LibretroName, true) {
 			return nil, "", fmt.Errorf("invalid platform %q", p.ID)
@@ -184,6 +191,10 @@ func Inspect(source string) ([]Item, string, error) {
 			return nil, "", fmt.Errorf("duplicate platform %q", p.ID)
 		}
 		platforms[p.ID] = p
+		if !seen[p.LibretroName] {
+			seen[p.LibretroName] = true
+			uniquePlatforms = append(uniquePlatforms, p)
+		}
 	}
 	ids := map[string]bool{}
 	result := make([]Item, 0, len(m.Contents))
@@ -204,16 +215,32 @@ func Inspect(source string) ([]Item, string, error) {
 		}
 		item := Item{ID: c.ID, Available: true, DeferMissing: c.DeferMissing, card: card{ID: c.ID, CanonicalName: c.CanonicalName, DisplayName: c.DisplayName, Platform: p, DownloadURL: "packages/" + url.PathEscape(c.ID) + ".zip"}}
 		paths := map[string]bool{}
+		addPath := func(name string) bool {
+			if _, exists := paths[name]; exists {
+				return false
+			}
+			for i := 0; i < len(name); i++ {
+				if name[i] == '/' && paths[name[:i]] {
+					return false
+				}
+			}
+			for i := 0; i < len(name); i++ {
+				if name[i] == '/' {
+					paths[name[:i]] = false
+				}
+			}
+			paths[name] = true
+			return true
+		}
 		for _, disc := range c.Discs {
 			if !safePath(disc.Entrypoint, false) || len(disc.Files) == 0 {
 				return nil, "", fmt.Errorf("invalid disc in %q", c.ID)
 			}
 			found := false
 			for _, f := range disc.Files {
-				if !safePath(f.Path, false) || paths[f.Path] || !safePath(f.Source, false) {
+				if !safePath(f.Path, false) || !safePath(f.Source, false) || !addPath(f.Path) {
 					return nil, "", fmt.Errorf("invalid or duplicate file in %q: %q", c.ID, f.Path)
 				}
-				paths[f.Path] = true
 				if f.Path == disc.Entrypoint {
 					found = true
 				}
@@ -242,7 +269,7 @@ func Inspect(source string) ([]Item, string, error) {
 		}
 		item.card.Entrypoint = c.Discs[0].Entrypoint
 		if c.Playlist != nil {
-			if !safePath(*c.Playlist, false) || paths[*c.Playlist] {
+			if !safePath(*c.Playlist, false) || !addPath(*c.Playlist) {
 				return nil, "", fmt.Errorf("invalid or duplicate playlist %q", *c.Playlist)
 			}
 			var lines []string
@@ -267,7 +294,7 @@ func Inspect(source string) ([]Item, string, error) {
 		}
 		result = append(result, item)
 	}
-	return result, fmt.Sprintf("%x", hash.Sum(nil)), nil
+	return &Snapshot{Items: result, Platforms: uniquePlatforms}, fmt.Sprintf("%x", hash.Sum(nil)), nil
 }
 
 func (item Item) WriteZIP(filename string) (err error) {

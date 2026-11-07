@@ -3,7 +3,9 @@ package catalog
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -87,24 +89,53 @@ func assetRoutes(games []game) map[string]assetRoute {
 		base := root + url.PathEscape(category)
 		routes[base] = assetRoute{redirect: base + "/"}
 		gameList := groups[platform]
+		sort.Slice(gameList, func(i, j int) bool { return gameList[i].id < gameList[j].id })
 		names := make([]string, 0, len(gameList))
+		counts := make(map[string]int)
 		for _, g := range gameList {
 			name := g.canonical
 			if name == "" {
 				name = g.id
 			}
 			names = append(names, name)
+			counts[strings.ToLower(name)]++
 		}
 		gameLabels := assetLabels(names)
-		entries := make([]string, 0, len(gameList))
+		used := make(map[string]bool)
+		allocated := make([]string, len(gameList))
+		for i, name := range names {
+			if counts[strings.ToLower(name)] == 1 {
+				allocated[i] = gameLabels[name]
+				used[strings.ToLower(allocated[i])] = true
+			}
+		}
 		for i, g := range gameList {
-			name := gameLabels[names[i]]
+			if allocated[i] != "" {
+				continue
+			}
+			baseName := "~" + hex.EncodeToString([]byte(names[i])) + "-" + hex.EncodeToString([]byte(g.id))
+			name := baseName
+			for n := 1; used[strings.ToLower(name)]; n++ {
+				name = fmt.Sprintf("%s-%d", baseName, n)
+			}
+			allocated[i] = name
+			used[strings.ToLower(name)] = true
+		}
+		entries := make([]string, 0, len(gameList))
+		aliases := make(map[string]int)
+		for _, g := range gameList {
+			aliases[strings.ToLower(g.id+".zip")]++
+		}
+		for i, g := range gameList {
+			name := allocated[i]
 			entry := name + ".zip"
 			entries = append(entries, entry)
 			routes[base+"/"+url.PathEscape(entry)] = assetRoute{archive: g.id, prefix: name + "/"}
+		}
+		for i, g := range gameList {
 			idEntry := g.id + ".zip"
-			if idEntry != entry {
-				routes[base+"/"+url.PathEscape(idEntry)] = assetRoute{archive: g.id, prefix: name + "/"}
+			if aliases[strings.ToLower(idEntry)] == 1 && !used[strings.ToLower(g.id)] {
+				routes[base+"/"+url.PathEscape(idEntry)] = assetRoute{archive: g.id, prefix: allocated[i] + "/"}
 			}
 		}
 		sort.Strings(entries)
@@ -120,6 +151,24 @@ func assetRoutes(games []game) map[string]assetRoute {
 	routes["/assets/frontend/assets.zip"] = assetRoute{isAssetsBundle: true}
 	routes["/assets/assets.zip"] = assetRoute{isAssetsBundle: true}
 	return routes
+}
+
+func (s *Server) serveRetroArch(w http.ResponseWriter, r *http.Request, snapshot *catalogSnapshot, asset assetRoute) {
+	if asset.isAssetsBundle {
+		s.serveAssetsZip(w, r)
+		return
+	}
+	if !asset.isIndex && asset.redirect == "" {
+		item := snapshot.packages["/api/packages/"+url.PathEscape(asset.archive)+".zip"]
+		var err error
+		asset.archive, err = s.archive(snapshot.fingerprint, item)
+		if err != nil {
+			http.Error(w, "package unavailable", http.StatusInternalServerError)
+			return
+		}
+		defer s.releaseArchive(asset.archive)
+	}
+	asset.serve(w, r)
 }
 
 func (a assetRoute) serve(w http.ResponseWriter, r *http.Request) {
@@ -161,51 +210,131 @@ func (a assetRoute) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) serveAssetsZip(w http.ResponseWriter, r *http.Request) {
-	cacheDir := filepath.Join(s.packagesDir, ".cache")
-	cachedZip := filepath.Join(cacheDir, "assets.zip")
+type assetsFlight struct {
+	done    chan struct{}
+	cancel  context.CancelFunc
+	waiters int
+}
 
+func (s *Server) serveLocalAssets(w http.ResponseWriter, r *http.Request) bool {
 	for _, candidate := range []string{
-		cachedZip,
+		filepath.Join(s.packagesDir, ".cache", "assets.zip"),
 		filepath.Join(s.packagesDir, "assets.zip"),
 		"assets.zip",
 	} {
 		if f, err := os.Open(candidate); err == nil {
-			defer f.Close()
-			if info, err := f.Stat(); err == nil && info.Mode().IsRegular() {
+			info, statErr := f.Stat()
+			if statErr == nil && info.Mode().IsRegular() {
 				w.Header().Set("Content-Type", "application/zip")
 				http.ServeContent(w, r, "assets.zip", info.ModTime(), f)
-				return
+				f.Close()
+				return true
 			}
+			f.Close()
 		}
 	}
+	return false
+}
 
-	if UpstreamAssetsURL != "" {
-		client := &http.Client{Timeout: 30 * time.Second}
-		resp, err := client.Get(UpstreamAssetsURL)
-		if err == nil && resp.StatusCode == http.StatusOK {
-			defer resp.Body.Close()
-			_ = os.MkdirAll(cacheDir, 0755)
-			tempFile, err := os.CreateTemp(cacheDir, ".assets-*.zip")
-			if err == nil {
-				tempName := tempFile.Name()
-				defer os.Remove(tempName)
-				if _, err := io.Copy(tempFile, resp.Body); err == nil {
-					_ = tempFile.Close()
-					if os.Rename(tempName, cachedZip) == nil {
-						if f, err := os.Open(cachedZip); err == nil {
-							defer f.Close()
-							if info, err := f.Stat(); err == nil {
-								w.Header().Set("Content-Type", "application/zip")
-								http.ServeContent(w, r, "assets.zip", info.ModTime(), f)
-								return
-							}
-						}
-					}
-				} else {
-					_ = tempFile.Close()
-				}
+func (s *Server) fetchAssets(ctx context.Context, limit int64) error {
+	for _, candidate := range []string{filepath.Join(s.packagesDir, ".cache", "assets.zip"), filepath.Join(s.packagesDir, "assets.zip"), "assets.zip"} {
+		if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
+			return nil
+		}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, UpstreamAssetsURL, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("assets upstream: %s", resp.Status)
+	}
+	if err := os.MkdirAll(s.packagesDir, 0755); err != nil {
+		return err
+	}
+	info, err := os.Lstat(s.packagesDir)
+	if err != nil || !info.IsDir() {
+		return fmt.Errorf("invalid assets cache root")
+	}
+	dir := filepath.Join(s.packagesDir, ".cache")
+	if err := os.Mkdir(dir, 0755); err != nil && !os.IsExist(err) {
+		return err
+	}
+	info, err = os.Lstat(dir)
+	if err != nil || !info.IsDir() {
+		return fmt.Errorf("invalid assets cache directory")
+	}
+	f, err := os.CreateTemp(dir, ".assets-*.zip")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	n, err := io.Copy(f, io.LimitReader(resp.Body, limit+1))
+	if err == nil && n > limit {
+		err = fmt.Errorf("assets bundle exceeds size limit")
+	}
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	s.assetsMu.Lock()
+	defer s.assetsMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), filepath.Join(dir, "assets.zip"))
+}
+
+func (s *Server) waitAssets(ctx context.Context) {
+	s.assetsMu.Lock()
+	flight := s.assetsFetch
+	if flight == nil {
+		fetchCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		flight = &assetsFlight{done: make(chan struct{}), cancel: cancel}
+		s.assetsFetch = flight
+		go func() {
+			defer cancel()
+			_ = s.fetchAssets(fetchCtx, 512<<20)
+			s.assetsMu.Lock()
+			if s.assetsFetch == flight {
+				s.assetsFetch = nil
 			}
+			close(flight.done)
+			s.assetsMu.Unlock()
+		}()
+	}
+	flight.waiters++
+	s.assetsMu.Unlock()
+	select {
+	case <-flight.done:
+	case <-ctx.Done():
+	}
+	s.assetsMu.Lock()
+	flight.waiters--
+	if flight.waiters == 0 {
+		flight.cancel()
+		if s.assetsFetch == flight {
+			s.assetsFetch = nil
+		}
+	}
+	s.assetsMu.Unlock()
+}
+
+func (s *Server) serveAssetsZip(w http.ResponseWriter, r *http.Request) {
+	if s.serveLocalAssets(w, r) {
+		return
+	}
+	if UpstreamAssetsURL != "" {
+		s.waitAssets(r.Context())
+		if s.serveLocalAssets(w, r) {
+			return
 		}
 	}
 

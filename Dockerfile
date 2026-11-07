@@ -7,7 +7,7 @@ COPY web/ ./
 RUN npm run build
 
 # Stage 2: Build Go Server with embedded Web
-FROM golang:1.22-alpine AS server-builder
+FROM golang:1.27-alpine AS server-builder
 ARG VERSION=dev
 WORKDIR /app
 COPY go.mod go.sum ./
@@ -23,7 +23,6 @@ WORKDIR /data
 COPY --from=server-builder /catalog-server /usr/local/bin/catalog-server
 
 ENV RETRO_LISTEN="0.0.0.0:5050" \
-    RETRO_CATALOG="/data/catalog-source.json" \
     RETRO_PACKAGES="/data/packages"
 
 EXPOSE 5050

@@ -4,15 +4,20 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"retroarch-marketplace/internal/content"
 )
 
 func TestMaintenanceCleanupSelection(t *testing.T) {
@@ -329,6 +334,265 @@ func TestMaintenancePreservesActiveDownloads(t *testing.T) {
 			if _, err := os.Stat(path); !os.IsNotExist(err) {
 				t.Fatalf("archive was not removed after download: %v", err)
 			}
+		})
+	}
+}
+
+func waitArchiveLeases(t *testing.T, s *Server, path string, count int) {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for {
+		s.cacheMu.Lock()
+		n := s.active[path]
+		s.cacheMu.Unlock()
+		if n == count {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("leases for %s: got %d, want %d", path, n, count)
+		default:
+			runtime.Gosched()
+		}
+	}
+}
+
+func TestConcurrentArchiveHTTP(t *testing.T) {
+	second := strings.Replace(card, `"example"`, `"second"`, 1)
+	third := strings.Replace(card, `"example"`, `"third"`, 1)
+	manifest, packages := fixture(t, "["+card+","+second+","+third+"]", map[string][]zipEntry{
+		"example": {{name: "game.txt", data: "first"}}, "second": {{name: "game.txt", data: "second"}}, "third": {{name: "game.txt", data: "third"}},
+	})
+	s, err := New(manifest, packages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := s.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready, err := s.archive(snapshot.fingerprint, snapshot.packages["/api/packages/third.zip"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.releaseArchive(ready)
+	started := make(chan string, 4)
+	firstGate, secondGate := make(chan struct{}), make(chan struct{})
+	s.writeZIP = func(item content.Item, path string) error {
+		started <- item.ID
+		switch item.ID {
+		case "example":
+			<-firstGate
+		case "second":
+			<-secondGate
+		}
+		return item.WriteZIP(path)
+	}
+	server := httptest.NewServer(s)
+	defer server.Close()
+	var firstOnce, secondOnce sync.Once
+	releaseFirst := func() { firstOnce.Do(func() { close(firstGate) }) }
+	releaseSecond := func() { secondOnce.Do(func() { close(secondGate) }) }
+	defer releaseFirst()
+	defer releaseSecond()
+	waitStarted := func() string {
+		t.Helper()
+		select {
+		case id := <-started:
+			return id
+		case <-time.After(5 * time.Second):
+			t.Fatal("archive build did not start")
+			return ""
+		}
+	}
+	type result struct {
+		body   []byte
+		err    error
+		status int
+	}
+	get := func(target string) <-chan result {
+		done := make(chan result, 1)
+		go func() {
+			resp, err := http.Get(server.URL + target)
+			if err != nil {
+				done <- result{err: err}
+				return
+			}
+			defer resp.Body.Close()
+			body, err := io.ReadAll(resp.Body)
+			done <- result{body, err, resp.StatusCode}
+		}()
+		return done
+	}
+	await := func(ch <-chan result) result {
+		t.Helper()
+		select {
+		case result := <-ch:
+			if result.err != nil || result.status != http.StatusOK {
+				t.Fatalf("HTTP: %d %v", result.status, result.err)
+			}
+			if _, err := zip.NewReader(bytes.NewReader(result.body), int64(len(result.body))); err != nil {
+				t.Fatal(err)
+			}
+			return result
+		case <-time.After(5 * time.Second):
+			t.Fatal("HTTP request blocked")
+			return result{}
+		}
+	}
+	first := get("/api/packages/example.zip")
+	if id := waitStarted(); id != "example" {
+		t.Fatal(id)
+	}
+	s.cacheMu.Lock()
+	var firstPath string
+	for p := range s.builds {
+		firstPath = p
+	}
+	s.cacheMu.Unlock()
+	asset := get("/assets/cores/" + url.PathEscape("Sony - PlayStation") + "/example.zip")
+	waitArchiveLeases(t, s, firstPath, 2)
+	await(get("/api/packages/third.zip"))
+	independent := get("/api/packages/second.zip")
+	if id := waitStarted(); id != "second" {
+		t.Fatal(id)
+	}
+	releaseSecond()
+	await(independent)
+	if err := os.WriteFile(firstPath, []byte("temporary test entry"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(firstPath, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.cleanupCache(time.Now(), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(firstPath); err != nil {
+		t.Fatalf("building archive removed: %v", err)
+	}
+	releaseFirst()
+	a, b := await(first), await(asset)
+	if bytes.Equal(a.body, b.body) {
+		t.Fatal("asset ZIP should contain a prefixed path")
+	}
+	for _, check := range []struct {
+		body []byte
+		name string
+	}{{a.body, "game.txt"}, {b.body, assetLabel("Étoile Game") + "-6578616d706c65/game.txt"}} {
+		z, err := zip.NewReader(bytes.NewReader(check.body), int64(len(check.body)))
+		if err != nil || len(z.File) != 1 {
+			t.Fatalf("unexpected ZIP: %v, %v", z, err)
+		}
+		if z.File[0].Name != check.name {
+			t.Fatalf("member %q, want %q", z.File[0].Name, check.name)
+		}
+		r, err := z.File[0].Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := io.ReadAll(r)
+		r.Close()
+		if err != nil || string(data) != "first" {
+			t.Fatalf("ZIP data %q: %v", data, err)
+		}
+	}
+	select {
+	case id := <-started:
+		t.Fatalf("duplicate build: %s", id)
+	default:
+	}
+	if err := s.cleanupCache(time.Now(), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestArchiveFailureWakesWaitersAndRetries(t *testing.T) {
+	for _, change := range []bool{false, true} {
+		name := "write error"
+		if change {
+			name = "fingerprint change"
+		}
+		t.Run(name, func(t *testing.T) {
+			manifest, packages := fixture(t, "["+card+"]", map[string][]zipEntry{"example": {{name: "game.txt", data: "first"}}})
+			s, err := New(manifest, packages)
+			if err != nil {
+				t.Fatal(err)
+			}
+			snapshot, err := s.load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			item := snapshot.packages["/api/packages/example.zip"]
+			started, gate := make(chan struct{}), make(chan struct{})
+			s.writeZIP = func(item content.Item, path string) error {
+				close(started)
+				<-gate
+				if !change {
+					return errors.New("write failed")
+				}
+				return item.WriteZIP(path)
+			}
+			type result struct {
+				path string
+				err  error
+			}
+			call := func() <-chan result {
+				ch := make(chan result, 1)
+				go func() { p, e := s.archive(snapshot.fingerprint, item); ch <- result{p, e} }()
+				return ch
+			}
+			first := call()
+			<-started
+			s.cacheMu.Lock()
+			var path string
+			for p := range s.builds {
+				path = p
+			}
+			s.cacheMu.Unlock()
+			second := call()
+			waitArchiveLeases(t, s, path, 2)
+			if change {
+				data, err := os.ReadFile(manifest)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(manifest, append(data, ' '), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			close(gate)
+			for _, ch := range []<-chan result{first, second} {
+				select {
+				case r := <-ch:
+					if r.err == nil {
+						t.Fatal("expected build error")
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("waiter blocked")
+				}
+			}
+			s.cacheMu.Lock()
+			if len(s.active) != 0 || len(s.builds) != 0 {
+				t.Fatal("leases or build leaked")
+			}
+			s.cacheMu.Unlock()
+			s.writeZIP = nil
+			current, err := s.load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			p, err := s.archive(current.fingerprint, current.packages["/api/packages/example.zip"])
+			if err != nil {
+				t.Fatalf("retry: %v", err)
+			}
+			s.releaseArchive(p)
+			z, err := zip.OpenReader(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			z.Close()
 		})
 	}
 }

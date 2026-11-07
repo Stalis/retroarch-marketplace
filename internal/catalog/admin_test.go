@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"bytes"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -20,6 +21,67 @@ func adminRequest(h http.Handler, method, target string, body []byte, etag strin
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	return w
+}
+
+func TestAdminArchivePathConflictsHTTP(t *testing.T) {
+	manifest, packages := fixture(t, "[]", nil)
+	if err := os.WriteFile(filepath.Join(filepath.Dir(manifest), "file"), []byte("data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	h, err := New(manifest, packages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(h)
+	defer server.Close()
+	original, err := os.ReadFile(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, first, second, playlist string
+		valid                         bool
+	}{
+		{"parent first", "a", "a/b", "list.m3u", false},
+		{"child first", "a/b", "a", "list.m3u", false},
+		{"duplicate", "a", "a", "list.m3u", false},
+		{"playlist parent", "a/b", "c", "a", false},
+		{"playlist child", "a", "c", "a/b", false},
+		{"component prefix", "a", "ab/b", "list.m3u", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := fmt.Sprintf(`{"platforms":[{"id":"p","name":"P","libretro_name":"P"}],"contents":[{"id":"g","canonical_name":"G","platform_id":"p","playlist":%q,"discs":[{"entrypoint":%q,"files":[{"source":"file","path":%q}]},{"entrypoint":%q,"files":[{"source":"file","path":%q}]}]}]}`, tc.playlist, tc.first, tc.first, tc.second, tc.second)
+			req, err := http.NewRequest("PUT", server.URL+"/api/admin/manifest", strings.NewReader(body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Origin", server.URL)
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("If-Match", manifestETag(original))
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			want := http.StatusBadRequest
+			if tc.valid {
+				want = http.StatusNoContent
+			}
+			if resp.StatusCode != want {
+				t.Fatalf("status %d, want %d", resp.StatusCode, want)
+			}
+			got, err := os.ReadFile(manifest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !tc.valid && !bytes.Equal(got, original) {
+				t.Fatal("manifest changed after rejected PUT")
+			}
+			if tc.valid && string(got) != body {
+				t.Fatal("valid manifest not saved")
+			}
+		})
+	}
 }
 
 func TestAdminManifestUpdatesAndRepair(t *testing.T) {

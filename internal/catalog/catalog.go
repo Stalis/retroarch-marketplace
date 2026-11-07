@@ -6,15 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
-	"unicode"
-	"unicode/utf8"
 
 	"retroarch-marketplace/internal/content"
 )
@@ -31,6 +28,7 @@ type game struct {
 type catalogSnapshot struct {
 	fingerprint string
 	games       []game
+	platforms   []content.Platform // every manifest platform, unique by libretro_name
 	packages    map[string]content.Item
 	assets      map[string]assetRoute
 }
@@ -43,6 +41,10 @@ type Server struct {
 	scanErr                  error
 	cacheMu                  sync.Mutex
 	active                   map[string]int
+	builds                   map[string]*archiveBuild
+	writeZIP                 func(content.Item, string) error
+	assetsMu                 sync.Mutex
+	assetsFetch              *assetsFlight
 }
 
 var gameFields = map[string]bool{"id": true, "canonical_name": true, "display_name": true, "platform": true, "entrypoint": true, "files": true, "download_url": true, "boxart_url": true}
@@ -179,7 +181,7 @@ func (s *Server) load() (*catalogSnapshot, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// shortcut: same-size edits preserving mtime are invisible; hash file contents if that must be detected.
-	items, fingerprint, err := content.Load(s.catalogPath)
+	source, fingerprint, err := content.Load(s.catalogPath)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: %w", err)
 	}
@@ -188,10 +190,11 @@ func (s *Server) load() (*catalogSnapshot, error) {
 	}
 	snapshot := &catalogSnapshot{
 		fingerprint: fingerprint,
-		games:       make([]game, 0, len(items)),
-		packages:    make(map[string]content.Item, len(items)),
+		games:       make([]game, 0, len(source.Items)),
+		platforms:   source.Platforms,
+		packages:    make(map[string]content.Item, len(source.Items)),
 	}
-	for i, item := range items {
+	for i, item := range source.Items {
 		if !item.Available {
 			continue
 		}
@@ -215,97 +218,67 @@ func New(catalogPath, packagesDir string) (*Server, error) {
 	return s, nil
 }
 
-// archiveLocked must be called with cacheMu held.
-func (s *Server) archiveLocked(fingerprint string, item content.Item) (string, error) {
+// prepareArchive must be called with cacheMu held.
+func (s *Server) prepareArchive(fingerprint string, item content.Item) (string, bool, error) {
 	if err := os.MkdirAll(s.packagesDir, 0755); err != nil {
-		return "", err
+		return "", false, err
 	}
 	info, err := os.Lstat(s.packagesDir)
 	if err != nil || !info.IsDir() {
-		return "", errors.New("package cache root is not a directory")
+		return "", false, errors.New("package cache root is not a directory")
 	}
 	dir := filepath.Join(s.packagesDir, ".cache")
 	if err := os.Mkdir(dir, 0755); err != nil && !os.IsExist(err) {
-		return "", err
+		return "", false, err
 	}
 	info, err = os.Lstat(dir)
 	if err != nil || !info.IsDir() {
-		return "", errors.New("package cache is not a directory")
+		return "", false, errors.New("package cache is not a directory")
 	}
 	idHash := sha256.Sum256([]byte(item.ID))
 	path := filepath.Join(dir, fmt.Sprintf("%s-%x.zip", fingerprint, idHash))
 	info, err = os.Lstat(path)
 	if err == nil {
 		if !info.Mode().IsRegular() {
-			return "", errors.New("cached package is not a regular file")
+			return "", false, errors.New("cached package is not a regular file")
 		}
-		return path, nil
+		return path, true, nil
 	}
 	if !os.IsNotExist(err) {
-		return "", err
+		return "", false, err
 	}
+	return path, false, nil
+}
+
+func (s *Server) buildArchive(path, fingerprint string, item content.Item) (string, error) {
+	dir := filepath.Dir(path)
 	temp, err := os.CreateTemp(dir, ".building-")
 	if err != nil {
 		return "", err
 	}
 	tempPath := temp.Name()
-	defer os.Remove(tempPath)
 	if err := temp.Close(); err != nil {
+		os.Remove(tempPath)
 		return "", err
 	}
-	if err := item.WriteZIP(tempPath); err != nil {
+	writeZIP := item.WriteZIP
+	if s.writeZIP != nil {
+		writeZIP = func(path string) error { return s.writeZIP(item, path) }
+	}
+	if err := writeZIP(tempPath); err != nil {
+		os.Remove(tempPath)
 		return "", err
 	}
 	current, err := s.load()
 	if err != nil {
+		os.Remove(tempPath)
 		return "", err
 	}
 	if current.fingerprint != fingerprint {
+		os.Remove(tempPath)
 		return "", errors.New("catalog changed while creating package")
 	}
-	if err := os.Rename(tempPath, path); err != nil {
-		return "", err
-	}
-	return path, nil
-}
-
-func foldEqual(a, b rune) bool {
-	if a == b {
-		return true
-	}
-	for r := unicode.SimpleFold(a); r != a; r = unicode.SimpleFold(r) {
-		if r == b {
-			return true
-		}
-	}
-	return false
-}
-
-func containsFold(s, query string) bool {
-	if query == "" {
-		return true
-	}
-	needle := []rune(query)
-	for i := range s {
-		rest := s[i:]
-		matched := true
-		for _, want := range needle {
-			if rest == "" {
-				matched = false
-				break
-			}
-			got, size := utf8.DecodeRuneInString(rest)
-			if !foldEqual(got, want) {
-				matched = false
-				break
-			}
-			rest = rest[size:]
-		}
-		if matched {
-			return true
-		}
-	}
-	return false
+	return tempPath, nil
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -321,7 +294,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.EscapedPath()
 	item, isPackage := snapshot.packages[path]
 	asset, isAsset := snapshot.assets[path]
-	if path != "/api/games" && !isPackage && !isAsset {
+	if path != "/api/games" && path != "/api/platforms" && !isPackage && !isAsset {
 		http.NotFound(w, r)
 		return
 	}
@@ -331,51 +304,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if isAsset {
-		if asset.isAssetsBundle {
-			s.serveAssetsZip(w, r)
-			return
-		}
-		if !asset.isIndex && asset.redirect == "" {
-			item = snapshot.packages["/api/packages/"+url.PathEscape(asset.archive)+".zip"]
-			asset.archive, err = s.archive(snapshot.fingerprint, item)
-			if err != nil {
-				http.Error(w, "package unavailable", http.StatusInternalServerError)
-				return
-			}
-			defer s.releaseArchive(asset.archive)
-		}
-		asset.serve(w, r)
+		s.serveRetroArch(w, r, snapshot, asset)
 		return
 	}
-	if isPackage {
-		packagePath, err := s.archive(snapshot.fingerprint, item)
-		if err != nil {
-			http.Error(w, "package unavailable", http.StatusInternalServerError)
-			return
-		}
-		defer s.releaseArchive(packagePath)
-		file, err := os.Open(packagePath)
-		if err != nil {
-			http.Error(w, "package unavailable", http.StatusInternalServerError)
-			return
-		}
-		defer file.Close()
-		w.Header().Set("Content-Type", "application/zip")
-		_, _ = io.Copy(w, file)
-		return
-	}
-	params, err := url.ParseQuery(r.URL.RawQuery)
-	if err != nil {
-		http.Error(w, "invalid query", http.StatusBadRequest)
-		return
-	}
-	query := params.Get("q")
-	results := make([]map[string]json.RawMessage, 0)
-	for _, g := range snapshot.games {
-		if containsFold(g.canonical, query) || containsFold(g.display, query) {
-			results = append(results, g.fields)
-		}
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(results)
+	s.serveCustomAPI(w, r, snapshot, path, item, isPackage)
 }

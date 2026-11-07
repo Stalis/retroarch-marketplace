@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
+	"time"
 
 	"retroarch-marketplace/internal/catalog"
 )
@@ -29,6 +32,11 @@ func main() {
 	}
 	catalog.Version = Version
 	log.Printf("starting catalog-server %s on %s", Version, cfg.Listen)
+	if cfg.initDefaultCatalog {
+		if err := initDefaultCatalog(cfg.Catalog); err != nil {
+			log.Fatal(err)
+		}
+	}
 	server, err := catalog.New(cfg.Catalog, cfg.Packages)
 	if err != nil {
 		log.Fatal(err)
@@ -36,9 +44,36 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go server.RunMaintenance(ctx, cfg.ScanInterval, cfg.CleanupInterval, cfg.CacheMaxAge)
-	err = http.ListenAndServe(cfg.Listen, server)
+	httpServer := &http.Server{Addr: cfg.Listen, Handler: server, ReadHeaderTimeout: 5 * time.Second}
+	err = httpServer.ListenAndServe()
 	cancel()
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+func initDefaultCatalog(path string) error {
+	if _, err := os.Lstat(path); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("checking default catalog %q: %w", path, err)
+	}
+	f, err := os.CreateTemp(filepath.Dir(path), ".catalog-init-*")
+	if err != nil {
+		return fmt.Errorf("creating default catalog %q: %w", path, err)
+	}
+	defer os.Remove(f.Name())
+	if _, err = f.WriteString(`{"platforms":[],"contents":[]}`); err == nil {
+		err = f.Sync()
+	}
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return fmt.Errorf("writing default catalog %q: %w", path, err)
+	}
+	if err := os.Link(f.Name(), path); err != nil && !errors.Is(err, os.ErrExist) {
+		return fmt.Errorf("publishing default catalog %q: %w", path, err)
+	}
+	return nil
 }

@@ -11,14 +11,14 @@ export default defineConfig(({ mode }) => {
       host: '127.0.0.1',
       ...(isMock
         ? {}
-        : { proxy: { '/api/admin': 'http://127.0.0.1:5050' } }),
+        : { proxy: { '/api': 'http://127.0.0.1:5050' } }),
     },
     plugins: [
       isMock && {
         name: 'mock-backend',
         configureServer(server) {
           server.middlewares.use((req, res, next) => {
-            if (req.url && req.url.startsWith('/api/admin/')) {
+            if (req.url && req.url.startsWith('/api/')) {
               mockBackend.handle(req, res);
             } else {
               next();
