@@ -111,6 +111,14 @@ If you have folders with dozens of games (CUE/BIN, ISO, CHD, multi-disc games), 
 
 The assistant will match platforms, verify CUE/M3U references, and validate the manifest against the server.
 
+Look up likely Libretro canonical names without starting the server or changing a manifest:
+
+```sh
+go run ./cmd/find-canonical-name -platform 'Sony - PlayStation' -q "King's Field"
+```
+
+The command returns up to ten ranked candidates as a JSON array. Candidates are suggestions, not verified release identities; check region, edition, revision, and disc information against your files. Agents can also use the [`find-canonical-name` skill](.agents/skills/find-canonical-name/SKILL.md).
+
 ---
 
 ## ⚙️ Configuration

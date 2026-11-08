@@ -81,7 +81,7 @@ func TestCanonicalNames(t *testing.T) {
 	if w := adminRequest(h, "GET", target, nil, ""); w.Code != 502 {
 		t.Fatalf("malformed: %d", w.Code)
 	}
-	listing = strings.Repeat("x", maxBoxartIndex+1)
+	listing = strings.Repeat("x", (8<<20)+1)
 	if w := adminRequest(h, "GET", target, nil, ""); w.Code != 502 {
 		t.Fatalf("oversized: %d", w.Code)
 	}
