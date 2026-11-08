@@ -136,6 +136,8 @@ The server works out of the box with zero configuration. For advanced setups, yo
 
 When the default manifest path is not configured explicitly and the file is absent, the server creates an empty catalog on first startup. Explicitly configured missing manifests remain errors.
 
+The server writes timestamped startup, HTTP request, and maintenance messages to standard error (view container output with `docker logs retroarch-catalog`). Request logs include the method, escaped path, response status, and duration; query parameters and request bodies are not logged. Paths may contain game names.
+
 Check installed version at any time:
 ```sh
 ./catalog-server -version
