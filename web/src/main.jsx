@@ -67,6 +67,8 @@ function App() {
   const [gameError, setGameError] = useState('');
   const [missing, setMissing] = useState(null);
   const [serverVersion, setServerVersion] = useState('');
+  const [lookup, setLookup] = useState(null);
+  const [lookupBusy, setLookupBusy] = useState(false);
   const dirty = loaded && text !== savedText;
   const gameDraftDirty = JSON.stringify(newGame) !== (gameReplacement ? gameReplacement.draft : JSON.stringify(blankGame()));
   const parsed = parseManifest(text);
@@ -75,6 +77,8 @@ function App() {
   const platforms = Array.isArray(manifest?.platforms) ? manifest.platforms : [];
   const game = games[selected];
   const platformName = (id) => display(platforms.find(platform => platform?.id === id)?.name, display(id, t.notSpecified));
+  const libretroName = platforms.find(platform => platform?.id === game?.platform_id)?.libretro_name;
+  const lookupCurrent = lookup && lookup.selected === selected && lookup.name === game?.canonical_name && lookup.platform === libretroName;
 
   useEffect(() => { document.documentElement.lang = locale; document.title = t.title; persistLocale(locale); }, [locale]);
 
@@ -151,6 +155,21 @@ function App() {
     if (updated === text && value !== game?.canonical_name) {
       setError('nameError');
     } else { setText(updated); setError(''); setNotice(''); }
+  }
+
+  async function findCanonicalNames() {
+    const request = { selected, name: game.canonical_name, platform: libretroName };
+    setLookupBusy(true); setLookup({ ...request, status: 'loading' });
+    try {
+      const params = new URLSearchParams({ platform: request.platform, q: request.name });
+      const response = await fetch(`/api/admin/canonical-names?${params}`);
+      if (!response.ok) throw new Error('lookup');
+      const candidates = await response.json();
+      if (!Array.isArray(candidates) || !candidates.every(name => typeof name === 'string')) throw new Error('lookup');
+      setLookup({ ...request, status: 'done', candidates });
+    } catch {
+      setLookup({ ...request, status: 'error' });
+    } finally { setLookupBusy(false); }
   }
 
   function submitPlatform(event) {
@@ -257,6 +276,10 @@ function App() {
               {game && typeof game === 'object' && !Array.isArray(game) ? <>
                 <label htmlFor="canonical">Canonical Name <span>{t.canonicalHint}</span></label>
                 <input id="canonical" value={typeof game.canonical_name === 'string' ? game.canonical_name : ''} onChange={event => changeName(event.target.value)} disabled={busy} />
+                <button className="secondary" type="button" onClick={findCanonicalNames} disabled={busy || lookupBusy || typeof libretroName !== 'string' || !libretroName.trim() || typeof game.canonical_name !== 'string' || !game.canonical_name.trim()}>{t.lookupCanonical}</button>
+                {lookupCurrent && lookup.status === 'loading' && <p role="status">{t.lookupLoading}</p>}
+                {lookupCurrent && lookup.status === 'error' && <p role="alert">{t.lookupError}</p>}
+                {lookupCurrent && lookup.status === 'done' && (lookup.candidates.length === 0 ? <p role="status">{t.lookupEmpty}</p> : <div>{lookup.candidates.map(candidate => <button className="secondary" type="button" key={candidate} disabled={busy} onClick={() => { changeName(candidate); setLookup(null); }}>{candidate}</button>)}</div>)}
                 <dl>
                   <div><dt>{t.identifier}</dt><dd>{display(game.id, t.notSpecifiedId)}</dd></div>
                   <div><dt>{t.platform}</dt><dd>{platformName(game.platform_id)}</dd></div>

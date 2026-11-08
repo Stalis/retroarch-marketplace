@@ -8,6 +8,12 @@ test('canonical name edits preserve unrelated JSON text', () => {
   assert.equal(updateCanonicalName(text, 0, 'new'), text.replace('"old"', '"new"'));
 });
 
+test('selected canonical name leaves other games and fields unchanged', () => {
+  const text = '{"contents":[{"canonical_name":"First","display_name":"Shown"},{"canonical_name":"Second","id":"second"}],"platforms":[{"id":"p"}]}';
+  const result = updateCanonicalName(text, 1, 'Second (USA)');
+  assert.deepEqual(JSON.parse(result), { contents: [{ canonical_name: 'First', display_name: 'Shown' }, { canonical_name: 'Second (USA)', id: 'second' }], platforms: [{ id: 'p' }] });
+});
+
 test('invalid JSON is reported and duplicate names are not silently rewritten', () => {
   assert.ok(parseManifest('{').error);
   const text = '{"contents":[{"canonical_name":"one","canonical_name":"two"}]}';

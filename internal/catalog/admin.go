@@ -129,6 +129,10 @@ func (s *Server) serveAdmin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "admin access requires a loopback client and host", http.StatusForbidden)
 		return
 	}
+	if r.URL.Path == "/api/admin/canonical-names" {
+		serveCanonicalNames(w, r)
+		return
+	}
 	if r.URL.Path != "/api/admin/manifest" {
 		serveAdminFiles(w, r)
 		return
