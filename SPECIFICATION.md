@@ -24,7 +24,7 @@ The application catalog handlers (`internal/catalog/customapi.go`) and the Retro
 1. `GET /api/games` returns available games as a JSON array. Search and platform filters combine with AND; pagination is applied after filtering. Each card describes the exact files in its package.
 2. `GET /api/platforms` returns declared platforms, including platforms without available games, in manifest order. For repeated `libretro_name` values, only the first platform is returned.
 3. A card's `download_url` resolves to a lazily generated, cached ZIP containing exactly the card's listed files. Generated playlists are included where applicable. Concurrent requests for one archive share its build; unrelated archives can build or download independently, and active archives are protected from cache cleanup.
-4. The `/assets/cores/` indexes and ZIP endpoints support RetroArch Content Downloader. Asset ZIP contents are nested under a game subdirectory to avoid overwriting sibling games on extraction.
+4. The `/assets/cores/` indexes and ZIP endpoints support RetroArch Content Downloader. Asset ZIP contents are nested under a game subdirectory to avoid overwriting sibling games on extraction. Colons in game names are retained in archive and directory names; clients on filesystems that disallow colons may not be able to extract them.
 5. An invalid manifest must not result in a stale successful catalog response. A valid manifest change or source availability change must be reflected in subsequent catalog requests.
 
 Frontend asset bundle requests share a bounded upstream download; a failed download falls back to the existing placeholder and later requests may retry.
