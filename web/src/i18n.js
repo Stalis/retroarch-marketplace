@@ -18,6 +18,7 @@ export const messages = {
     publishedGames: n => `доступно игр: ${n}`,
     deleteGame: 'Удалить игру', confirmDelete: 'Удалить игру из каталога? Исходные файлы не будут затронуты.', loadMore: 'Загрузить ещё',
     deletePlatform: 'Удалить', platformInUse: 'Платформу нельзя удалить: к ней привязаны игры.', unavailable: 'недоступна',
+    nameMismatch: 'нет в BoxArt', nameMismatchHint: 'Название не совпадает ни с одним названием Libretro BoxArt для этой платформы — обложка не найдётся. Похожие названия:',
   },
   en: {
     title: 'Catalog management', subtitle: 'Local catalog editor', language: 'Language',
@@ -38,6 +39,7 @@ export const messages = {
     publishedGames: n => `available games: ${n}`,
     deleteGame: 'Delete game', confirmDelete: 'Delete the game from the catalog? Source files are not touched.', loadMore: 'Load more',
     deletePlatform: 'Delete', platformInUse: 'The platform cannot be deleted: games use it.', unavailable: 'unavailable',
+    nameMismatch: 'not in BoxArt', nameMismatchHint: 'The name matches no Libretro BoxArt name for this platform, so no cover art will be found. Similar names:',
   },
 };
 

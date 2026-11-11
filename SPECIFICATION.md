@@ -52,6 +52,7 @@ The HTTP server limits request-header reads to five seconds without imposing a r
 
 - The `ETag` is the quoted game revision. A write with a stale or missing `If-Match` returns `412` without changing the game; the revision is checked before sources.
 - Missing sources require explicit approval: without `?allow_missing=1`, the server returns `422` with a JSON `missing` list of `{"id","path"}` and stores nothing. With approval, the game is stored and excluded from the catalog until its sources exist. Non-regular sources and other stat errors are rejected.
+- The admin editor checks the canonical name against the platform's BoxArt listing as it is loaded or typed, and marks a name that is not an exact listing entry as "not in BoxArt" (RetroArch would find no cover art), offering similar names.
 - Selecting a canonical-name candidate changes only the editor's value; it is not persisted until the game is saved.
 
 ## Canonical names

@@ -63,10 +63,13 @@ function App() {
   const [platformError, setPlatformError] = useState('');
   const [addedPlatform, setAddedPlatform] = useState('');
   const listRequest = useRef(0);
+  const lookupRequest = useRef(0);
   const dirty = JSON.stringify(draft) !== savedDraft;
   const platformOf = id => platforms.find(platform => platform.id === id);
   const libretroName = platformOf(draft.platform_id)?.libretro_name;
   const lookupCurrent = lookup && lookup.name === draft.canonical_name && lookup.platform === libretroName;
+  // Exact listing match only: RetroArch fetches cover art by this exact name.
+  const nameMismatch = lookupCurrent && lookup.status === 'done' && !lookup.candidates.includes(draft.canonical_name);
 
   useEffect(() => { document.documentElement.lang = locale; document.title = t.title; persistLocale(locale); }, [locale]);
   useEffect(() => {
@@ -75,6 +78,11 @@ function App() {
     return () => window.removeEventListener('beforeunload', warn);
   }, [dirty]);
   useEffect(() => { setMissing(null); }, [draft]);
+  useEffect(() => {
+    if (!libretroName || !draft.canonical_name.trim()) return;
+    const timer = setTimeout(findCanonicalNames, 500);
+    return () => clearTimeout(timer);
+  }, [draft.canonical_name, libretroName]);
 
   async function run(action, networkKey = 'loadNetwork') {
     setBusy(true); setError(''); setNotice('');
@@ -163,16 +171,19 @@ function App() {
 
   async function findCanonicalNames() {
     const request = { name: draft.canonical_name, platform: libretroName };
-    setLookup({ ...request, status: 'loading' });
+    const id = ++lookupRequest.current;
+    // A newer lookup supersedes this one; its late result must not replace the newer state.
+    const settle = state => { if (id === lookupRequest.current) setLookup({ ...request, ...state }); };
+    settle({ status: 'loading' });
     try {
       const params = new URLSearchParams({ platform: request.platform, q: request.name });
       const response = await fetch(`${api}/canonical-names?${params}`);
       if (!response.ok) throw new Error('lookup');
       const candidates = await response.json();
       if (!Array.isArray(candidates) || !candidates.every(name => typeof name === 'string')) throw new Error('lookup');
-      setLookup({ ...request, status: 'done', candidates });
+      settle({ status: 'done', candidates });
     } catch {
-      setLookup({ ...request, status: 'error' });
+      settle({ status: 'error' });
     }
   }
 
@@ -246,6 +257,7 @@ function App() {
             <div><p className="eyebrow">{editing ? editing.id : t.addGame}</p><h2 id="game-heading">{editing ? draft.canonical_name || editing.id : t.gameData}</h2></div>
             <div className="game-meta">
               {editing && !editing.available && <span className="badge warning">{t.unavailable}</span>}
+              {nameMismatch && <span className="badge warning">{t.nameMismatch}</span>}
               {dirty && <span className="status unsaved">{t.unsaved}</span>}
             </div>
           </div>
@@ -273,8 +285,8 @@ function App() {
                   <button className="secondary btn-small" type="button" onClick={findCanonicalNames} disabled={lookup?.status === 'loading' || !libretroName || !draft.canonical_name.trim()}>{t.lookupCanonical}</button>
                   {lookupCurrent && lookup.status === 'loading' && <p role="status" className="hint">{t.lookupLoading}</p>}
                   {lookupCurrent && lookup.status === 'error' && <p role="alert" className="hint">{t.lookupError}</p>}
-                  {lookupCurrent && lookup.status === 'done' && (lookup.candidates.length === 0 ? <p role="status" className="hint">{t.lookupEmpty}</p> :
-                    <div>{lookup.candidates.map(candidate => <button className="secondary btn-small" type="button" key={candidate} onClick={() => { setDraft({ ...draft, canonical_name: candidate }); setLookup(null); }}>{candidate}</button>)}</div>)}
+                  {lookupCurrent && lookup.status === 'done' && nameMismatch && (lookup.candidates.length === 0 ? <p role="status" className="hint">{t.nameMismatchHint} {t.lookupEmpty}</p> :
+                    <div><p role="status" className="hint">{t.nameMismatchHint}</p>{lookup.candidates.map(candidate => <button className="secondary btn-small" type="button" key={candidate} onClick={() => setDraft({ ...draft, canonical_name: candidate })}>{candidate}</button>)}</div>)}
                 </div>
                 <div>
                   <label htmlFor="game-display_name">{t.displayOptional}</label>
