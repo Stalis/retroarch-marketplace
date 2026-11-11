@@ -10,5 +10,9 @@
 /web/node_modules/
 /web/dist/
 
+# Locally generated GitNexus skills
+/.agents/skills/gitnexus-*/
+/.claude/skills/gitnexus-*/
+
 # OS files
 .DS_Store
