@@ -415,8 +415,12 @@ func (s *Store) inspect(g content.Game, p content.Platform) (available bool, fin
 	i := 0
 	for _, disc := range g.Discs {
 		for _, f := range disc.Files {
-			path := sources[i]
+			path := filepath.Clean(sources[i])
 			i++
+			// Validate already keeps sources relative and dot-free; this guards the boundary where they meet the filesystem.
+			if !strings.HasPrefix(path, strings.TrimSuffix(s.root, string(filepath.Separator))+string(filepath.Separator)) {
+				return false, "", nil, fmt.Errorf("source %q is outside the database directory", f.Source)
+			}
 			info, err := os.Stat(path)
 			switch {
 			case errors.Is(err, fs.ErrNotExist):
