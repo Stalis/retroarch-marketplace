@@ -155,6 +155,9 @@ The server works out of the box with zero configuration. For advanced setups, yo
 | Scan interval | `-scan-interval` | `RETRO_SCAN_INTERVAL` | `10m` | How often to re-check source files for availability |
 | Cleanup interval| `-cleanup-interval` | `RETRO_CLEANUP_INTERVAL` | `1h` | Cache cleaner frequency |
 | Cache max age | `-cache-max-age` | `RETRO_CACHE_MAX_AGE` | `24h` | How long to keep generated ZIPs |
+| BoxArt title distance | `-boxart-max-distance` | `RETRO_BOXART_MAX_DISTANCE` | No limit | Maximum edits between base titles |
+
+Set `boxart_max_distance = 2` in TOML to allow two insertions, deletions or substitutions in the admin BoxArt search and `find-name -q`. The comparison ignores case and trailing edition tags such as `(Australia)` or `(En,Fr)`. Use `0` to show only editions of the exact base title.
 
 The database is created on first startup if absent; its parent folder must exist.
 

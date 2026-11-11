@@ -4,3 +4,6 @@ packages = "packages"
 scan_interval = "10m"
 cleanup_interval = "1h"
 cache_max_age = "24h"
+
+# Optional: maximum edits between base titles in BoxArt search.
+# boxart_max_distance = 2

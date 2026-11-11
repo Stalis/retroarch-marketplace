@@ -17,7 +17,7 @@ var boxartClient = canonicalnames.NewClient()
 
 func findName(args []string, stdout, stderr io.Writer) int {
 	var platform, query, file string
-	cfg, flags, code, ok := parseCommand("find-name", "find-name [-config path] [-database path] -platform <libretro_name> (-q <title> | -file <path>)", args, stderr, func(f *flag.FlagSet) {
+	cfg, flags, code, ok := parseCommand("find-name", "find-name [-config path] [-database path] [-boxart-max-distance n] -platform <libretro_name> (-q <title> | -file <path>)", args, stderr, func(f *flag.FlagSet) {
 		f.StringVar(&platform, "platform", "", "exact Libretro platform name")
 		f.StringVar(&query, "q", "", "game title")
 		f.StringVar(&file, "file", "", "ROM filename to match")
@@ -39,7 +39,7 @@ func findName(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	defer st.Close()
-	finder := canonicalnames.Finder{Store: st, Client: boxartClient, Now: time.Now}
+	finder := canonicalnames.Finder{Store: st, Client: boxartClient, Now: time.Now, MaxTitleDistance: cfg.BoxArtMaxDistance}
 	var names []string
 	if file != "" {
 		names, err = finder.File(context.Background(), platform, file)

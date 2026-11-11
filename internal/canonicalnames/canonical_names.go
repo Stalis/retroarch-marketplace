@@ -35,9 +35,10 @@ func validPlatform(platform string) bool {
 
 // Finder looks up canonical names in BoxArt listings cached in the store.
 type Finder struct {
-	Store  *store.Store
-	Client *http.Client
-	Now    func() time.Time
+	Store            *store.Store
+	Client           *http.Client
+	Now              func() time.Time
+	MaxTitleDistance *int
 }
 
 func (f Finder) names(ctx context.Context, platform string) ([]string, error) {
@@ -69,7 +70,10 @@ func (f Finder) Titles(ctx context.Context, platform, query string) ([]string, e
 	if err != nil {
 		return nil, err
 	}
-	return Rank(names, query), nil
+	if f.MaxTitleDistance == nil {
+		return Rank(names, query), nil
+	}
+	return rank(names, query, f.MaxTitleDistance), nil
 }
 
 // File returns listing names matching a ROM filename, best first; empty means no match.
@@ -177,6 +181,10 @@ var editionSuffix = regexp.MustCompile(`(?:[[:space:]]+(?:\([^()]*\)|\[[^\[\]]*\
 
 // Rank returns up to 10 names, putting exact titles and their editions before fuzzy matches.
 func Rank(names []string, query string) []string {
+	return rank(names, query, nil)
+}
+
+func rank(names []string, query string, maxDistance *int) []string {
 	type candidate struct {
 		name, lower string
 		priority    int
@@ -184,15 +192,19 @@ func Rank(names []string, query string) []string {
 	}
 	q := strings.ToLower(query)
 	qt := tokenSet(q)
-	base := editionSuffix.ReplaceAllString(q, "")
+	base := baseTitle(q)
 	ranked := make([]candidate, 0, len(names))
 	for _, name := range names {
 		lower := strings.ToLower(name)
+		title := baseTitle(lower)
+		if maxDistance != nil && runeDistance(base, title) > *maxDistance {
+			continue
+		}
 		priority := 3
 		switch {
 		case name == query:
 			priority = 0
-		case editionSuffix.ReplaceAllString(lower, "") == base:
+		case title == base:
 			priority = 1
 		case tokenSet(lower) == qt:
 			priority = 2
@@ -220,6 +232,14 @@ func Rank(names []string, query string) []string {
 		result = append(result, item.name)
 	}
 	return result
+}
+
+func baseTitle(lower string) string {
+	base := editionSuffix.ReplaceAllString(lower, "")
+	if base == "" {
+		return lower
+	}
+	return base
 }
 
 func tokenSet(s string) string {

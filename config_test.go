@@ -36,7 +36,7 @@ cache_max_age = "25h"
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := config{"cli:3", "cli.db", "cli-packages", 13 * time.Minute, 4 * time.Hour, 27 * time.Hour}
+	want := config{"cli:3", "cli.db", "cli-packages", 13 * time.Minute, 4 * time.Hour, 27 * time.Hour, nil}
 	if got != want {
 		t.Fatalf("got %+v, want %+v", got, want)
 	}
@@ -44,7 +44,7 @@ cache_max_age = "25h"
 	if err != nil {
 		t.Fatal(err)
 	}
-	want = config{"env:2", "env.db", "env-packages", 12 * time.Minute, 3 * time.Hour, 26 * time.Hour}
+	want = config{"env:2", "env.db", "env-packages", 12 * time.Minute, 3 * time.Hour, 26 * time.Hour, nil}
 	if got != want {
 		t.Fatalf("got %+v, want %+v", got, want)
 	}
@@ -52,7 +52,7 @@ cache_max_age = "25h"
 	if err != nil {
 		t.Fatal(err)
 	}
-	want = config{"file:1", "file.db", "file-packages", 11 * time.Minute, 2 * time.Hour, 25 * time.Hour}
+	want = config{"file:1", "file.db", "file-packages", 11 * time.Minute, 2 * time.Hour, 25 * time.Hour, nil}
 	if got != want {
 		t.Fatalf("got %+v, want %+v", got, want)
 	}
@@ -112,7 +112,7 @@ func TestConfigDefaultsAndOptionalFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := config{"127.0.0.1:5050", "catalog.db", "packages", 10 * time.Minute, time.Hour, 24 * time.Hour}
+	want := config{"127.0.0.1:5050", "catalog.db", "packages", 10 * time.Minute, time.Hour, 24 * time.Hour, nil}
 	if got != want {
 		t.Fatalf("got %+v, want %+v", got, want)
 	}
@@ -170,6 +170,36 @@ func TestHTTPHeaderTimeoutAndSlowBody(t *testing.T) {
 		resp.Body.Close()
 		if err != nil || resp.StatusCode != http.StatusOK || string(body) != tc.want {
 			t.Fatalf("%s: status %d body %q: %v", tc.path, resp.StatusCode, body, err)
+		}
+	}
+}
+
+func TestBoxArtDistanceConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "boxart.toml")
+	if err := os.WriteFile(path, []byte("boxart_max_distance = 2\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		override string
+		args     []string
+		want     int
+	}{
+		{"", nil, 2},
+		{"1", nil, 1},
+		{"1", []string{"-boxart-max-distance=0"}, 0},
+	} {
+		env := map[string]string{"RETRO_CONFIG": path}
+		if tc.override != "" {
+			env["RETRO_BOXART_MAX_DISTANCE"] = tc.override
+		}
+		cfg, _, err := loadConfig("serve", tc.args, configEnv(env), nil)
+		if err != nil || cfg.BoxArtMaxDistance == nil || *cfg.BoxArtMaxDistance != tc.want {
+			t.Fatalf("args %v, env %q: got %v, want %d", tc.args, tc.override, err, tc.want)
+		}
+	}
+	for _, invalid := range []string{"-1", "1.5", "abc"} {
+		if _, _, err := loadConfig("serve", []string{"-config", path, "-boxart-max-distance=" + invalid}, configEnv(nil), nil); err == nil {
+			t.Fatalf("accepted invalid BoxArt distance %q", invalid)
 		}
 	}
 }

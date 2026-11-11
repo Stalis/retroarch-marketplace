@@ -228,7 +228,12 @@ func (s *Server) load() (*catalogSnapshot, error) {
 
 // New serves the catalog in st, refreshing source availability first.
 func New(st *store.Store, packagesDir string) (*Server, error) {
-	s := &Server{store: st, packagesDir: packagesDir, finder: canonicalnames.Finder{Store: st, Client: boxartClient, Now: time.Now}}
+	return NewWithBoxArtDistance(st, packagesDir, nil)
+}
+
+// NewWithBoxArtDistance also applies an optional edit distance to BoxArt title lookups.
+func NewWithBoxArtDistance(st *store.Store, packagesDir string, maxDistance *int) (*Server, error) {
+	s := &Server{store: st, packagesDir: packagesDir, finder: canonicalnames.Finder{Store: st, Client: boxartClient, Now: time.Now, MaxTitleDistance: maxDistance}}
 	if err := st.Refresh(context.Background()); err != nil {
 		return nil, err
 	}

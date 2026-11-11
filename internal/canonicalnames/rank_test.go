@@ -24,3 +24,22 @@ func TestRankPrioritizesSameTitleEditions(t *testing.T) {
 		}
 	}
 }
+
+func TestRankWithMaxDistance(t *testing.T) {
+	names := []string{"Darkstone (Australia)", "Darkstones (USA)", "Dark Seed"}
+	for _, tc := range []struct {
+		max  int
+		want []string
+	}{
+		{0, names[:1]},
+		{1, names[:2]},
+	} {
+		if got := rank(names, "DarkStone (Europe)", &tc.max); !slices.Equal(got, tc.want) {
+			t.Errorf("max %d: got %v, want %v", tc.max, got, tc.want)
+		}
+	}
+	zero := 0
+	if got := rank(names, "Other", &zero); got == nil || len(got) != 0 {
+		t.Errorf("expected an empty result, got %#v", got)
+	}
+}

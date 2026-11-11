@@ -6,33 +6,36 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/BurntSushi/toml"
 )
 
 type config struct {
-	Listen          string
-	Database        string
-	Packages        string
-	ScanInterval    time.Duration
-	CleanupInterval time.Duration
-	CacheMaxAge     time.Duration
+	Listen            string
+	Database          string
+	Packages          string
+	ScanInterval      time.Duration
+	CleanupInterval   time.Duration
+	CacheMaxAge       time.Duration
+	BoxArtMaxDistance *int
 }
 
 type fileConfig struct {
-	Listen          *string `toml:"listen"`
-	Database        *string `toml:"database"`
-	Packages        *string `toml:"packages"`
-	ScanInterval    *string `toml:"scan_interval"`
-	CleanupInterval *string `toml:"cleanup_interval"`
-	CacheMaxAge     *string `toml:"cache_max_age"`
+	Listen            *string `toml:"listen"`
+	Database          *string `toml:"database"`
+	Packages          *string `toml:"packages"`
+	ScanInterval      *string `toml:"scan_interval"`
+	CleanupInterval   *string `toml:"cleanup_interval"`
+	CacheMaxAge       *string `toml:"cache_max_age"`
+	BoxArtMaxDistance *int    `toml:"boxart_max_distance"`
 }
 
 // loadConfig parses cmd's flags (define adds subcommand-specific ones) and merges flags > env > TOML > defaults.
 // Callers check positional arguments.
 func loadConfig(cmd string, args []string, lookupEnv func(string) (string, bool), define func(*flag.FlagSet)) (config, *flag.FlagSet, error) {
-	cfg := config{"127.0.0.1:5050", "catalog.db", "packages", 10 * time.Minute, time.Hour, 24 * time.Hour}
+	cfg := config{"127.0.0.1:5050", "catalog.db", "packages", 10 * time.Minute, time.Hour, 24 * time.Hour, nil}
 	flags := flag.NewFlagSet("content-catalog "+cmd, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	configPath := flags.String("config", "config.toml", "configuration file")
@@ -42,6 +45,7 @@ func loadConfig(cmd string, args []string, lookupEnv func(string) (string, bool)
 	scan := flags.String("scan-interval", "", "source scan interval")
 	cleanup := flags.String("cleanup-interval", "", "cache cleanup interval")
 	maxAge := flags.String("cache-max-age", "", "maximum cache age")
+	boxArtDistance := flags.String("boxart-max-distance", "", "maximum BoxArt title edit distance")
 	if define != nil {
 		define(flags)
 	}
@@ -94,6 +98,23 @@ func loadConfig(cmd string, args []string, lookupEnv func(string) (string, bool)
 		}
 		return nil
 	}
+	setDistance := func(value int) error {
+		if value < 0 {
+			return errors.New("boxart_max_distance must be a non-negative integer")
+		}
+		cfg.BoxArtMaxDistance = &value
+		return nil
+	}
+	parseDistance := func(value *string) error {
+		if value == nil {
+			return nil
+		}
+		n, err := strconv.Atoi(*value)
+		if err != nil {
+			return fmt.Errorf("boxart_max_distance must be a non-negative integer: %q", *value)
+		}
+		return setDistance(n)
+	}
 	apply := func(values fileConfig) error {
 		for _, item := range []struct {
 			name  string
@@ -119,6 +140,11 @@ func loadConfig(cmd string, args []string, lookupEnv func(string) (string, bool)
 		}
 		return nil
 	}
+	if file.BoxArtMaxDistance != nil {
+		if err := setDistance(*file.BoxArtMaxDistance); err != nil {
+			return cfg, flags, err
+		}
+	}
 	if err := apply(file); err != nil {
 		return cfg, flags, err
 	}
@@ -128,7 +154,10 @@ func loadConfig(cmd string, args []string, lookupEnv func(string) (string, bool)
 		}
 		return nil
 	}
-	if err := apply(fileConfig{env("RETRO_LISTEN"), env("RETRO_DATABASE"), env("RETRO_PACKAGES"), env("RETRO_SCAN_INTERVAL"), env("RETRO_CLEANUP_INTERVAL"), env("RETRO_CACHE_MAX_AGE")}); err != nil {
+	if err := apply(fileConfig{env("RETRO_LISTEN"), env("RETRO_DATABASE"), env("RETRO_PACKAGES"), env("RETRO_SCAN_INTERVAL"), env("RETRO_CLEANUP_INTERVAL"), env("RETRO_CACHE_MAX_AGE"), nil}); err != nil {
+		return cfg, flags, err
+	}
+	if err := parseDistance(env("RETRO_BOXART_MAX_DISTANCE")); err != nil {
 		return cfg, flags, err
 	}
 	selected := func(name string, value *string) *string {
@@ -137,7 +166,10 @@ func loadConfig(cmd string, args []string, lookupEnv func(string) (string, bool)
 		}
 		return nil
 	}
-	if err := apply(fileConfig{selected("listen", listen), selected("database", database), selected("packages", packages), selected("scan-interval", scan), selected("cleanup-interval", cleanup), selected("cache-max-age", maxAge)}); err != nil {
+	if err := apply(fileConfig{selected("listen", listen), selected("database", database), selected("packages", packages), selected("scan-interval", scan), selected("cleanup-interval", cleanup), selected("cache-max-age", maxAge), nil}); err != nil {
+		return cfg, flags, err
+	}
+	if err := parseDistance(selected("boxart-max-distance", boxArtDistance)); err != nil {
 		return cfg, flags, err
 	}
 	return cfg, flags, nil

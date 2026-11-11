@@ -13,7 +13,7 @@ import (
 )
 
 func serve(args []string, stderr io.Writer) int {
-	cfg, flags, code, ok := parseCommand("serve", "serve [-config path] [-listen address] [-database path] [-packages path] [-scan-interval duration] [-cleanup-interval duration] [-cache-max-age duration]", args, stderr, nil)
+	cfg, flags, code, ok := parseCommand("serve", "serve [-config path] [-listen address] [-database path] [-packages path] [-scan-interval duration] [-cleanup-interval duration] [-cache-max-age duration] [-boxart-max-distance n]", args, stderr, nil)
 	if !ok {
 		return code
 	}
@@ -29,7 +29,7 @@ func serve(args []string, stderr io.Writer) int {
 		return 1
 	}
 	defer st.Close()
-	server, err := catalog.New(st, cfg.Packages)
+	server, err := catalog.NewWithBoxArtDistance(st, cfg.Packages, cfg.BoxArtMaxDistance)
 	if err != nil {
 		log.Print(err)
 		return 1

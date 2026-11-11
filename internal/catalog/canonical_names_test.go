@@ -104,3 +104,20 @@ func TestCanonicalNames(t *testing.T) {
 		t.Fatalf("oversized: %d", w.Code)
 	}
 }
+
+func TestCanonicalNamesWithMaxDistance(t *testing.T) {
+	st, packages := fixture(t, "[]", nil)
+	names := []string{"Darkstone (Australia)", "Darkstones (USA)", "Dark Seed"}
+	if err := st.ReplaceBoxart(context.Background(), "Test System", names, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	limit := 0
+	h, err := NewWithBoxArtDistance(st, packages, &limit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := adminRequest(h, "GET", "/api/admin/canonical-names?platform=Test+System&q=DarkStone", nil, "")
+	if w.Code != 200 || strings.TrimSpace(w.Body.String()) != `["Darkstone (Australia)"]` {
+		t.Fatalf("lookup: %d %s", w.Code, w.Body.String())
+	}
+}
