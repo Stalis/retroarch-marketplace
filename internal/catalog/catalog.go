@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -12,8 +13,11 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
+	"retroarch-marketplace/internal/canonicalnames"
 	"retroarch-marketplace/internal/content"
+	"retroarch-marketplace/internal/store"
 )
 
 // Version is the application version string.
@@ -26,25 +30,28 @@ type game struct {
 }
 
 type catalogSnapshot struct {
-	fingerprint string
-	games       []game
-	platforms   []content.Platform // every manifest platform, unique by libretro_name
-	packages    map[string]content.Item
-	assets      map[string]assetRoute
+	revision  int64
+	games     []game
+	byID      map[string]game
+	platforms []content.Platform // every platform, unique by libretro_name
+	packages  map[string]content.Item
+	assets    map[string]assetRoute
 }
 
 // Server serves the catalog and maintains its generated archive cache.
 type Server struct {
-	catalogPath, packagesDir string
-	mu                       sync.Mutex
-	snapshot                 *catalogSnapshot
-	scanErr                  error
-	cacheMu                  sync.Mutex
-	active                   map[string]int
-	builds                   map[string]*archiveBuild
-	writeZIP                 func(content.Item, string) error
-	assetsMu                 sync.Mutex
-	assetsFetch              *assetsFlight
+	store       *store.Store
+	finder      canonicalnames.Finder
+	packagesDir string
+	mu          sync.Mutex
+	snapshot    *catalogSnapshot
+	scanErr     error
+	cacheMu     sync.Mutex
+	active      map[string]int
+	builds      map[string]*archiveBuild
+	writeZIP    func(content.Item, string) error
+	assetsMu    sync.Mutex
+	assetsFetch *assetsFlight
 }
 
 var gameFields = map[string]bool{"id": true, "canonical_name": true, "display_name": true, "platform": true, "entrypoint": true, "files": true, "download_url": true, "boxart_url": true}
@@ -180,38 +187,51 @@ func parseGame(raw json.RawMessage) (game, error) {
 func (s *Server) load() (*catalogSnapshot, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// shortcut: same-size edits preserving mtime are invisible; hash file contents if that must be detected.
-	source, fingerprint, err := content.Load(s.catalogPath)
+	ctx := context.Background()
+	revision, err := s.store.Revision(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: %w", err)
 	}
-	if s.snapshot != nil && s.snapshot.fingerprint == fingerprint {
+	if s.snapshot != nil && s.snapshot.revision == revision {
 		return s.snapshot, nil
 	}
-	snapshot := &catalogSnapshot{
-		fingerprint: fingerprint,
-		games:       make([]game, 0, len(source.Items)),
-		platforms:   source.Platforms,
-		packages:    make(map[string]content.Item, len(source.Items)),
+	items, platforms, err := s.store.AvailableItems(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: %w", err)
 	}
-	for i, item := range source.Items {
-		if !item.Available {
-			continue
+	snapshot := &catalogSnapshot{
+		revision: revision,
+		games:    make([]game, 0, len(items)),
+		byID:     make(map[string]game, len(items)),
+		packages: make(map[string]content.Item, len(items)),
+	}
+	seen := map[string]bool{}
+	for _, p := range platforms {
+		if !seen[p.LibretroName] {
+			seen[p.LibretroName] = true
+			snapshot.platforms = append(snapshot.platforms, p)
 		}
+	}
+	for i, item := range items {
 		g, err := parseGame(item.Card)
 		if err != nil {
 			return nil, fmt.Errorf("game %d: %w", i, err)
 		}
 		snapshot.packages["/api/packages/"+url.PathEscape(g.id)+".zip"] = item
 		snapshot.games = append(snapshot.games, g)
+		snapshot.byID[g.id] = g
 	}
 	snapshot.assets = assetRoutes(snapshot.games)
 	s.snapshot = snapshot
 	return snapshot, nil
 }
 
-func New(catalogPath, packagesDir string) (*Server, error) {
-	s := &Server{catalogPath: catalogPath, packagesDir: packagesDir}
+// New serves the catalog in st, refreshing source availability first.
+func New(st *store.Store, packagesDir string) (*Server, error) {
+	s := &Server{store: st, packagesDir: packagesDir, finder: canonicalnames.Finder{Store: st, Client: boxartClient, Now: time.Now}}
+	if err := st.Refresh(context.Background()); err != nil {
+		return nil, err
+	}
 	if _, err := s.load(); err != nil {
 		return nil, err
 	}
@@ -219,7 +239,7 @@ func New(catalogPath, packagesDir string) (*Server, error) {
 }
 
 // prepareArchive must be called with cacheMu held.
-func (s *Server) prepareArchive(fingerprint string, item content.Item) (string, bool, error) {
+func (s *Server) prepareArchive(item content.Item) (string, bool, error) {
 	if err := os.MkdirAll(s.packagesDir, 0755); err != nil {
 		return "", false, err
 	}
@@ -236,7 +256,7 @@ func (s *Server) prepareArchive(fingerprint string, item content.Item) (string, 
 		return "", false, errors.New("package cache is not a directory")
 	}
 	idHash := sha256.Sum256([]byte(item.ID))
-	path := filepath.Join(dir, fmt.Sprintf("%s-%x.zip", fingerprint, idHash))
+	path := filepath.Join(dir, fmt.Sprintf("%s-%x.zip", item.Fingerprint, idHash))
 	info, err = os.Lstat(path)
 	if err == nil {
 		if !info.Mode().IsRegular() {
@@ -250,7 +270,7 @@ func (s *Server) prepareArchive(fingerprint string, item content.Item) (string, 
 	return path, false, nil
 }
 
-func (s *Server) buildArchive(path, fingerprint string, item content.Item) (string, error) {
+func (s *Server) buildArchive(path string, item content.Item) (string, error) {
 	dir := filepath.Dir(path)
 	temp, err := os.CreateTemp(dir, ".building-")
 	if err != nil {
@@ -274,7 +294,7 @@ func (s *Server) buildArchive(path, fingerprint string, item content.Item) (stri
 		os.Remove(tempPath)
 		return "", err
 	}
-	if current.fingerprint != fingerprint {
+	if latest, ok := current.packages["/api/packages/"+url.PathEscape(item.ID)+".zip"]; !ok || latest.Fingerprint != item.Fingerprint {
 		os.Remove(tempPath)
 		return "", errors.New("catalog changed while creating package")
 	}
@@ -282,7 +302,7 @@ func (s *Server) buildArchive(path, fingerprint string, item content.Item) (stri
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == "/api/admin/manifest" || r.URL.Path == "/api/admin/canonical-names" || r.URL.Path == "/admin" || strings.HasPrefix(r.URL.Path, "/admin/") {
+	if strings.HasPrefix(r.URL.Path, "/api/admin/") || r.URL.Path == "/admin" || strings.HasPrefix(r.URL.Path, "/admin/") {
 		s.serveAdmin(w, r)
 		return
 	}

@@ -3,6 +3,7 @@ package catalog
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +15,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"retroarch-marketplace/internal/content"
+	"retroarch-marketplace/internal/store"
 )
 
 const card = `{"id":"example","canonical_name":"Étoile Game","display_name":"Приключение","platform":{"id":"psx","name":"PlayStation","libretro_name":"Sony - PlayStation"},"entrypoint":"game.txt","files":["game.txt"],"download_url":"original.zip"}`
@@ -24,59 +28,53 @@ type zipEntry struct {
 	mode os.FileMode
 }
 
-// fixture translates card-shaped test data into the domain source format.
-func fixture(t *testing.T, manifest string, packages map[string][]zipEntry) (string, string) {
+// fixture translates card-shaped test data into stored games with sources beside the database.
+func fixture(t *testing.T, cards string, packages map[string][]zipEntry) (*store.Store, string) {
 	t.Helper()
 	dir := t.TempDir()
-	var cards []struct {
-		ID        string  `json:"id"`
-		Canonical string  `json:"canonical_name"`
-		Display   *string `json:"display_name"`
-		Platform  struct {
-			ID           string `json:"id"`
-			Name         string `json:"name"`
-			LibretroName string `json:"libretro_name"`
-		} `json:"platform"`
-		Entrypoint string `json:"entrypoint"`
+	var parsed []struct {
+		ID         string           `json:"id"`
+		Canonical  string           `json:"canonical_name"`
+		Display    *string          `json:"display_name"`
+		Platform   content.Platform `json:"platform"`
+		Entrypoint string           `json:"entrypoint"`
 	}
-	if err := json.Unmarshal([]byte(manifest), &cards); err != nil {
+	if err := json.Unmarshal([]byte(cards), &parsed); err != nil {
 		t.Fatal(err)
 	}
-	platforms := []any{}
-	contents := []any{}
+	st, err := store.Open(filepath.Join(dir, "catalog.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	ctx := context.Background()
 	seen := map[string]string{}
-	for i, c := range cards {
+	var games []content.Game
+	for i, c := range parsed {
 		platformID, ok := seen[c.Platform.LibretroName]
 		if !ok {
 			platformID = fmt.Sprintf("platform-%d", len(seen))
 			c.Platform.ID = platformID
-			platforms = append(platforms, c.Platform)
+			if err := st.CreatePlatform(ctx, c.Platform); err != nil {
+				t.Fatal(err)
+			}
 			seen[c.Platform.LibretroName] = platformID
 		}
-		files := []any{}
+		var files []content.File
 		for j, entry := range packages[c.ID] {
 			name := fmt.Sprintf("source-%d-%d", i, j)
 			if err := os.WriteFile(filepath.Join(dir, name), []byte(entry.data), 0600); err != nil {
 				t.Fatal(err)
 			}
-			files = append(files, map[string]string{"source": name, "path": entry.name})
+			files = append(files, content.File{Source: name, Path: entry.name})
 		}
-		content := map[string]any{"id": c.ID, "canonical_name": c.Canonical, "platform_id": platformID,
-			"discs": []any{map[string]any{"entrypoint": c.Entrypoint, "files": files}}}
-		if c.Display != nil {
-			content["display_name"] = *c.Display
-		}
-		contents = append(contents, content)
+		games = append(games, content.Game{ID: c.ID, CanonicalName: c.Canonical, DisplayName: c.Display, PlatformID: platformID,
+			Discs: []content.Disc{{Entrypoint: c.Entrypoint, Files: files}}})
 	}
-	data, err := json.Marshal(map[string]any{"platforms": platforms, "contents": contents})
-	if err != nil {
+	if err := st.CreateGames(ctx, games, nil); err != nil {
 		t.Fatal(err)
 	}
-	catalog := filepath.Join(dir, "catalog-source.json")
-	if err := os.WriteFile(catalog, data, 0600); err != nil {
-		t.Fatal(err)
-	}
-	return catalog, filepath.Join(dir, "packages")
+	return st, filepath.Join(dir, "packages")
 }
 
 func request(t *testing.T, h http.Handler, method, target string) *httptest.ResponseRecorder {
@@ -275,20 +273,12 @@ func TestLazyCacheAndReload(t *testing.T) {
 	if err != nil || !after.ModTime().Equal(info.ModTime()) {
 		t.Fatalf("cache not reused: %v", err)
 	}
-	data, err := os.ReadFile(catalog)
+	g, revision, _, _, err := catalog.Game(context.Background(), "example")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(catalog, []byte("{"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	for _, target := range []string{"/api/games", "/api/packages/example.zip", "/missing"} {
-		if got := request(t, h, "GET", target).Code; got != 500 {
-			t.Errorf("invalid manifest %s: %d", target, got)
-		}
-	}
-	changed := strings.Replace(string(data), "Étoile Game", "Changed Game", 1)
-	if err := os.WriteFile(catalog, []byte(changed), 0600); err != nil {
+	g.CanonicalName = "Changed Game"
+	if _, err := catalog.UpdateGame(context.Background(), g, revision, false); err != nil {
 		t.Fatal(err)
 	}
 	w := request(t, h, "GET", "/api/games?q=changed")
@@ -341,17 +331,20 @@ func TestEncodedIDAndCacheSymlink(t *testing.T) {
 	}
 }
 
-func TestCacheTracksSourcesAndManifestPath(t *testing.T) {
-	catalog, packages := fixture(t, "["+card+"]", map[string][]zipEntry{"example": {{name: "game.txt", data: "first"}}})
-	h, err := New(catalog, packages)
+func TestCacheTracksSources(t *testing.T) {
+	st, packages := fixture(t, "["+card+"]", map[string][]zipEntry{"example": {{name: "game.txt", data: "first"}}})
+	h, err := New(st, packages)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := request(t, h, "GET", "/api/packages/example.zip").Code; got != 200 {
 		t.Fatal(got)
 	}
-	source := filepath.Join(filepath.Dir(catalog), "source-0-0")
+	source := filepath.Join(st.Root(), "source-0-0")
 	if err := os.WriteFile(source, []byte("different content"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.checkSources(); err != nil {
 		t.Fatal(err)
 	}
 	if got := request(t, h, "GET", "/api/packages/example.zip").Code; got != 200 {
@@ -360,26 +353,16 @@ func TestCacheTracksSourcesAndManifestPath(t *testing.T) {
 	if entries := cacheEntries(t, packages); len(entries) != 2 {
 		t.Fatalf("source change cache: %v", entries)
 	}
-	data, err := os.ReadFile(catalog)
+	ctx := context.Background()
+	g, revision, _, _, err := st.Game(ctx, "example")
 	if err != nil {
 		t.Fatal(err)
 	}
-	other := filepath.Join(filepath.Dir(catalog), "other.json")
-	if err := os.WriteFile(other, data, 0600); err != nil {
+	if err := st.DeleteGame(ctx, "example", revision); err != nil {
 		t.Fatal(err)
 	}
-	h2, err := New(other, packages)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := request(t, h2, "GET", "/api/packages/example.zip").Code; got != 200 {
-		t.Fatal(got)
-	}
-	if entries := cacheEntries(t, packages); len(entries) != 3 {
-		t.Fatalf("manifest path cache: %v", entries)
-	}
-	changed := strings.Replace(string(data), `"id":"example"`, `"id":"renamed"`, 1)
-	if err := os.WriteFile(catalog, []byte(changed), 0600); err != nil {
+	g.ID = "renamed"
+	if _, err := st.CreateGame(ctx, g, false); err != nil {
 		t.Fatal(err)
 	}
 	if got := request(t, h, "GET", "/api/packages/example.zip").Code; got != 404 {
@@ -391,67 +374,53 @@ func TestCacheTracksSourcesAndManifestPath(t *testing.T) {
 	if err := os.Remove(source); err != nil {
 		t.Fatal(err)
 	}
-	if got := request(t, h, "GET", "/api/games").Code; got != 500 {
-		t.Fatalf("missing source: %d", got)
+	if err := h.checkSources(); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := New(catalog, packages); err == nil {
-		t.Fatal("startup accepted missing source")
+	if w := request(t, h, "GET", "/api/games"); w.Code != 200 || strings.TrimSpace(w.Body.String()) != "[]" {
+		t.Fatalf("missing source: %d %s", w.Code, w.Body.String())
 	}
 }
 
-func TestDeferredGameAvailability(t *testing.T) {
+func TestUnavailableGameAppearsAfterRefresh(t *testing.T) {
 	second := strings.Replace(card, `"example"`, `"second"`, 1)
-	catalogPath, packages := fixture(t, "["+card+","+second+"]", map[string][]zipEntry{
-		"example": {{name: "game.txt", data: "content"}},
-		"second":  {{name: "game.txt", data: "other"}},
-	})
-	data, err := os.ReadFile(catalogPath)
+	st, packages := fixture(t, "["+second+"]", map[string][]zipEntry{"second": {{name: "game.txt", data: "other"}}})
+	ctx := context.Background()
+	g, _, _, _, err := st.Game(ctx, "second")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var manifest map[string]any
-	if err := json.Unmarshal(data, &manifest); err != nil {
+	g.ID = "example"
+	g.Discs[0].Files[0].Source = "pending"
+	if _, err := st.CreateGame(ctx, g, true); err != nil {
 		t.Fatal(err)
 	}
-	manifest["contents"].([]any)[0].(map[string]any)["defer_missing"] = true
-	data, err = json.Marshal(manifest)
+	h, err := New(st, packages)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(catalogPath, data, 0600); err != nil {
+	w := request(t, h, http.MethodGet, "/api/games")
+	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), `"id":"example"`) || !strings.Contains(w.Body.String(), `"id":"second"`) {
+		t.Fatalf("pending catalog: %d %s", w.Code, w.Body.String())
+	}
+	for _, target := range []string{"/api/packages/example.zip", "/assets/cores/Sony%20-%20PlayStation/example.zip"} {
+		if w := request(t, h, http.MethodGet, target); w.Code != http.StatusNotFound {
+			t.Fatalf("pending %s: %d", target, w.Code)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(st.Root(), "pending"), []byte("content"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	source := filepath.Join(filepath.Dir(catalogPath), "source-0-0")
-	if err := os.Remove(source); err != nil {
+	if err := h.checkSources(); err != nil {
 		t.Fatal(err)
 	}
-	for restart := range 2 {
-		h, err := New(catalogPath, packages)
-		if err != nil {
-			t.Fatal(err)
-		}
-		w := request(t, h, http.MethodGet, "/api/games")
-		if w.Code != http.StatusOK || strings.Contains(w.Body.String(), `"id":"example"`) || !strings.Contains(w.Body.String(), `"id":"second"`) {
-			t.Fatalf("pending catalog: %d %s", w.Code, w.Body.String())
-		}
-		for _, target := range []string{"/api/packages/example.zip", "/assets/cores/Sony%20-%20PlayStation/example.zip"} {
-			if w := request(t, h, http.MethodGet, target); w.Code != http.StatusNotFound {
-				t.Fatalf("pending %s: %d", target, w.Code)
-			}
-		}
-		if restart == 1 {
-			if err := os.WriteFile(source, []byte("content"), 0600); err != nil {
-				t.Fatal(err)
-			}
-			w = request(t, h, http.MethodGet, "/api/games")
-			if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"id":"example"`) {
-				t.Fatalf("activated catalog: %d %s", w.Code, w.Body.String())
-			}
-			for _, target := range []string{"/api/packages/example.zip", "/assets/cores/Sony%20-%20PlayStation/example.zip"} {
-				if w := request(t, h, http.MethodGet, target); w.Code != http.StatusOK {
-					t.Fatalf("activated %s: %d", target, w.Code)
-				}
-			}
+	w = request(t, h, http.MethodGet, "/api/games")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"id":"example"`) {
+		t.Fatalf("activated catalog: %d %s", w.Code, w.Body.String())
+	}
+	for _, target := range []string{"/api/packages/example.zip", "/assets/cores/Sony%20-%20PlayStation/example.zip"} {
+		if w := request(t, h, http.MethodGet, target); w.Code != http.StatusOK {
+			t.Fatalf("activated %s: %d", target, w.Code)
 		}
 	}
 }

@@ -12,46 +12,41 @@ import (
 )
 
 type config struct {
-	Listen             string
-	Catalog            string
-	Packages           string
-	ScanInterval       time.Duration
-	CleanupInterval    time.Duration
-	CacheMaxAge        time.Duration
-	initDefaultCatalog bool
+	Listen          string
+	Database        string
+	Packages        string
+	ScanInterval    time.Duration
+	CleanupInterval time.Duration
+	CacheMaxAge     time.Duration
 }
-
-var errVersion = errors.New("version requested")
 
 type fileConfig struct {
 	Listen          *string `toml:"listen"`
-	Catalog         *string `toml:"catalog"`
+	Database        *string `toml:"database"`
 	Packages        *string `toml:"packages"`
 	ScanInterval    *string `toml:"scan_interval"`
 	CleanupInterval *string `toml:"cleanup_interval"`
 	CacheMaxAge     *string `toml:"cache_max_age"`
 }
 
-func loadConfig(args []string, lookupEnv func(string) (string, bool)) (config, error) {
-	cfg := config{"127.0.0.1:5050", "catalog-source.json", "packages", 10 * time.Minute, time.Hour, 24 * time.Hour, false}
-	flags := flag.NewFlagSet("catalog-server", flag.ContinueOnError)
+// loadConfig parses cmd's flags (define adds subcommand-specific ones) and merges flags > env > TOML > defaults.
+// Callers check positional arguments.
+func loadConfig(cmd string, args []string, lookupEnv func(string) (string, bool), define func(*flag.FlagSet)) (config, *flag.FlagSet, error) {
+	cfg := config{"127.0.0.1:5050", "catalog.db", "packages", 10 * time.Minute, time.Hour, 24 * time.Hour}
+	flags := flag.NewFlagSet("content-catalog "+cmd, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	version := flags.Bool("version", false, "display version and exit")
 	configPath := flags.String("config", "config.toml", "configuration file")
 	listen := flags.String("listen", "", "HTTP listen address")
-	catalog := flags.String("catalog", "", "source manifest path")
+	database := flags.String("database", "", "SQLite catalog database path")
 	packages := flags.String("packages", "", "package cache root")
 	scan := flags.String("scan-interval", "", "source scan interval")
 	cleanup := flags.String("cleanup-interval", "", "cache cleanup interval")
 	maxAge := flags.String("cache-max-age", "", "maximum cache age")
+	if define != nil {
+		define(flags)
+	}
 	if err := flags.Parse(args); err != nil {
-		return cfg, err
-	}
-	if *version {
-		return cfg, errVersion
-	}
-	if flags.NArg() != 0 {
-		return cfg, fmt.Errorf("unexpected argument %q", flags.Arg(0))
+		return cfg, flags, err
 	}
 	visited := make(map[string]bool)
 	flags.Visit(func(f *flag.Flag) { visited[f.Name] = true })
@@ -63,21 +58,21 @@ func loadConfig(args []string, lookupEnv func(string) (string, bool)) (config, e
 		path, explicit = *configPath, true
 	}
 	if explicit && path == "" {
-		return cfg, errors.New("config path must not be empty")
+		return cfg, flags, errors.New("config path must not be empty")
 	}
 	var file fileConfig
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if explicit || !errors.Is(err, os.ErrNotExist) {
-			return cfg, fmt.Errorf("reading config %q: %w", path, err)
+			return cfg, flags, fmt.Errorf("reading config %q: %w", path, err)
 		}
 	} else {
 		meta, err := toml.Decode(string(data), &file)
 		if err != nil {
-			return cfg, fmt.Errorf("decoding config %q: %w", path, err)
+			return cfg, flags, fmt.Errorf("decoding config %q: %w", path, err)
 		}
 		if unknown := meta.Undecoded(); len(unknown) != 0 {
-			return cfg, fmt.Errorf("unknown config key %s", unknown[0])
+			return cfg, flags, fmt.Errorf("unknown config key %s", unknown[0])
 		}
 	}
 	setString := func(name string, value *string, dst *string) error {
@@ -105,7 +100,7 @@ func loadConfig(args []string, lookupEnv func(string) (string, bool)) (config, e
 			value *string
 			dst   *string
 		}{
-			{"listen", values.Listen, &cfg.Listen}, {"catalog", values.Catalog, &cfg.Catalog}, {"packages", values.Packages, &cfg.Packages},
+			{"listen", values.Listen, &cfg.Listen}, {"database", values.Database, &cfg.Database}, {"packages", values.Packages, &cfg.Packages},
 		} {
 			if err := setString(item.name, item.value, item.dst); err != nil {
 				return err
@@ -125,7 +120,7 @@ func loadConfig(args []string, lookupEnv func(string) (string, bool)) (config, e
 		return nil
 	}
 	if err := apply(file); err != nil {
-		return cfg, err
+		return cfg, flags, err
 	}
 	env := func(name string) *string {
 		if value, ok := lookupEnv(name); ok {
@@ -133,8 +128,8 @@ func loadConfig(args []string, lookupEnv func(string) (string, bool)) (config, e
 		}
 		return nil
 	}
-	if err := apply(fileConfig{env("RETRO_LISTEN"), env("RETRO_CATALOG"), env("RETRO_PACKAGES"), env("RETRO_SCAN_INTERVAL"), env("RETRO_CLEANUP_INTERVAL"), env("RETRO_CACHE_MAX_AGE")}); err != nil {
-		return cfg, err
+	if err := apply(fileConfig{env("RETRO_LISTEN"), env("RETRO_DATABASE"), env("RETRO_PACKAGES"), env("RETRO_SCAN_INTERVAL"), env("RETRO_CLEANUP_INTERVAL"), env("RETRO_CACHE_MAX_AGE")}); err != nil {
+		return cfg, flags, err
 	}
 	selected := func(name string, value *string) *string {
 		if visited[name] {
@@ -142,10 +137,8 @@ func loadConfig(args []string, lookupEnv func(string) (string, bool)) (config, e
 		}
 		return nil
 	}
-	if err := apply(fileConfig{selected("listen", listen), selected("catalog", catalog), selected("packages", packages), selected("scan-interval", scan), selected("cleanup-interval", cleanup), selected("cache-max-age", maxAge)}); err != nil {
-		return cfg, err
+	if err := apply(fileConfig{selected("listen", listen), selected("database", database), selected("packages", packages), selected("scan-interval", scan), selected("cleanup-interval", cleanup), selected("cache-max-age", maxAge)}); err != nil {
+		return cfg, flags, err
 	}
-	_, envCatalog := lookupEnv("RETRO_CATALOG")
-	cfg.initDefaultCatalog = file.Catalog == nil && !envCatalog && !visited["catalog"]
-	return cfg, nil
+	return cfg, flags, nil
 }

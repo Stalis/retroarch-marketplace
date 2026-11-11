@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"retroarch-marketplace/internal/canonicalnames"
 	"retroarch-marketplace/internal/content"
 )
 
@@ -37,17 +38,24 @@ func (s *Server) RunMaintenance(ctx context.Context, scanInterval, cleanupInterv
 				log.Print("catalog source scan completed")
 			}
 		case <-cleanup.C:
-			if err := s.cleanupCache(time.Now(), cacheMaxAge); err != nil {
+			now := time.Now()
+			if err := s.cleanupCache(now, cacheMaxAge); err != nil {
 				log.Printf("catalog cache cleanup: %v", err)
 			} else {
 				log.Print("catalog cache cleanup completed")
+			}
+			if _, err := s.store.PurgeBoxart(ctx, now.Add(-canonicalnames.TTL)); err != nil {
+				log.Printf("canonical name cache cleanup: %v", err)
 			}
 		}
 	}
 }
 
 func (s *Server) checkSources() error {
-	_, err := s.load()
+	err := s.store.Refresh(context.Background())
+	if err == nil {
+		_, err = s.load()
+	}
 	s.mu.Lock()
 	s.scanErr = err
 	s.mu.Unlock()
@@ -60,9 +68,9 @@ type archiveBuild struct {
 }
 
 // The lease keeps a cache entry alive until the response has finished streaming.
-func (s *Server) archive(fingerprint string, item content.Item) (string, error) {
+func (s *Server) archive(item content.Item) (string, error) {
 	s.cacheMu.Lock()
-	path, ready, err := s.prepareArchive(fingerprint, item)
+	path, ready, err := s.prepareArchive(item)
 	if err != nil {
 		s.cacheMu.Unlock()
 		return "", err
@@ -91,7 +99,7 @@ func (s *Server) archive(fingerprint string, item content.Item) (string, error) 
 	build = &archiveBuild{done: make(chan struct{})}
 	s.builds[path] = build
 	s.cacheMu.Unlock()
-	temp, err := s.buildArchive(path, fingerprint, item)
+	temp, err := s.buildArchive(path, item)
 	s.cacheMu.Lock()
 	if err == nil {
 		err = os.Rename(temp, path)

@@ -3,15 +3,15 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev
 
 
 run:
-	go run . $(ARGS)
+	go run . serve $(ARGS)
 
 build:
 	mkdir -p bin
-	go build -ldflags="-X main.Version=$(VERSION)" -o bin/catalog-server .
+	go build -ldflags="-X main.Version=$(VERSION)" -o bin/content-catalog .
 
 build-release: admin-build
 	mkdir -p bin
-	go build -tags release -ldflags="-s -w -X main.Version=$(VERSION)" -o bin/catalog-server .
+	go build -tags release -ldflags="-s -w -X main.Version=$(VERSION)" -o bin/content-catalog .
 
 test:
 	go test ./...

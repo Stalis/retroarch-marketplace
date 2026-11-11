@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 type boxartTransport struct{ url string }
@@ -34,8 +36,8 @@ func TestCanonicalNames(t *testing.T) {
 	old := boxartClient
 	boxartClient = &http.Client{Transport: boxartTransport{upstream.URL}}
 	defer func() { boxartClient = old }()
-	manifest, packages := fixture(t, "[]", nil)
-	h, err := New(manifest, packages)
+	st, packages := fixture(t, "[]", nil)
+	h, err := New(st, packages)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,30 +60,46 @@ func TestCanonicalNames(t *testing.T) {
 		t.Fatalf("remote: %d", w.Code)
 	}
 	status = 500
+	if w := adminRequest(h, "GET", target, nil, ""); w.Code != 200 {
+		t.Fatalf("cached listing: %d", w.Code)
+	}
+	// Later cases need fresh fetches; drop the cached listing before each one.
+	purge := func() {
+		if _, err := st.PurgeBoxart(context.Background(), time.Now().Add(time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	purge()
+	status = 500
 	if w := adminRequest(h, "GET", target, nil, ""); w.Code != 502 {
 		t.Fatalf("upstream: %d", w.Code)
 	}
 	status = 200
 	listing = `<html><body><a href="Rock%20&amp;%20Roll.png">x</a><a href="other.jpg">x</a></body></html>`
+	purge()
 	w = adminRequest(h, "GET", target, nil, "")
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &names) != nil || len(names) != 1 || names[0] != "Rock & Roll" {
 		t.Fatalf("encoded name: %d %s", w.Code, w.Body.String())
 	}
 	listing = `<html><body><a href="other.jpg">x</a></body></html>`
+	purge()
 	w = adminRequest(h, "GET", target, nil, "")
 	if w.Code != 200 || strings.TrimSpace(w.Body.String()) != "[]" {
 		t.Fatalf("empty: %d %s", w.Code, w.Body.String())
 	}
 	listing = `<html><body><a href="partial.png">x</a>`
+	purge()
 	if w := adminRequest(h, "GET", target, nil, ""); w.Code != 502 {
 		t.Fatalf("truncated: %d %s", w.Code, w.Body.String())
 	}
 	status = 200
 	listing = "not a listing"
+	purge()
 	if w := adminRequest(h, "GET", target, nil, ""); w.Code != 502 {
 		t.Fatalf("malformed: %d", w.Code)
 	}
 	listing = strings.Repeat("x", (8<<20)+1)
+	purge()
 	if w := adminRequest(h, "GET", target, nil, ""); w.Code != 502 {
 		t.Fatalf("oversized: %d", w.Code)
 	}

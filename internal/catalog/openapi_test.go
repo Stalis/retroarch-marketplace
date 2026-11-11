@@ -7,13 +7,14 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/getkin/kin-openapi/openapi3filter"
 	"github.com/getkin/kin-openapi/routers/legacy"
+
+	"retroarch-marketplace/internal/content"
 )
 
 // TestOpenAPIContract fails when real responses drift from ../../openapi.yaml.
@@ -35,19 +36,7 @@ func TestOpenAPIContract(t *testing.T) {
 		"example": {{name: "game.txt", data: "a"}}, "second": {{name: "game.txt", data: "b"}}, "third": {{name: "game.txt", data: "c"}},
 	})
 	// A platform without games, visible only with ?all.
-	var source map[string]any
-	data, err := os.ReadFile(catalog)
-	if err == nil {
-		err = json.Unmarshal(data, &source)
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	source["platforms"] = append(source["platforms"].([]any), map[string]string{"id": "empty", "name": "Empty", "libretro_name": "Empty - Platform"})
-	if data, err = json.Marshal(source); err == nil {
-		err = os.WriteFile(catalog, data, 0600)
-	}
-	if err != nil {
+	if err := catalog.CreatePlatform(context.Background(), content.Platform{ID: "empty", Name: "Empty", LibretroName: "Empty - Platform"}); err != nil {
 		t.Fatal(err)
 	}
 	h, err := New(catalog, packages)

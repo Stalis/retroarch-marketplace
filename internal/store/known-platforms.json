@@ -1,0 +1,412 @@
+[
+  {
+    "id": "amstrad-cpc",
+    "name": "Amstrad CPC",
+    "libretro_name": "Amstrad - CPC"
+  },
+  {
+    "id": "amstrad-gx4000",
+    "name": "Amstrad GX4000",
+    "libretro_name": "Amstrad - GX4000"
+  },
+  {
+    "id": "apple-ii",
+    "name": "Apple II",
+    "libretro_name": "Apple - II"
+  },
+  {
+    "id": "atari-2600",
+    "name": "Atari 2600",
+    "libretro_name": "Atari - 2600"
+  },
+  {
+    "id": "atari-5200",
+    "name": "Atari 5200",
+    "libretro_name": "Atari - 5200"
+  },
+  {
+    "id": "atari-7800",
+    "name": "Atari 7800",
+    "libretro_name": "Atari - 7800"
+  },
+  {
+    "id": "atari-8-bit",
+    "name": "Atari 8-bit Family",
+    "libretro_name": "Atari - 8-bit Family"
+  },
+  {
+    "id": "atari-jaguar",
+    "name": "Atari Jaguar",
+    "libretro_name": "Atari - Jaguar"
+  },
+  {
+    "id": "atari-jaguar-cd",
+    "name": "Atari Jaguar CD",
+    "libretro_name": "Atari - Jaguar CD"
+  },
+  {
+    "id": "atari-lynx",
+    "name": "Atari Lynx",
+    "libretro_name": "Atari - Lynx"
+  },
+  {
+    "id": "atari-st",
+    "name": "Atari ST",
+    "libretro_name": "Atari - ST"
+  },
+  {
+    "id": "atomiswave",
+    "name": "Atomiswave",
+    "libretro_name": "Atomiswave"
+  },
+  {
+    "id": "wonderswan",
+    "name": "Bandai WonderSwan",
+    "libretro_name": "Bandai - WonderSwan"
+  },
+  {
+    "id": "wonderswan-color",
+    "name": "Bandai WonderSwan Color",
+    "libretro_name": "Bandai - WonderSwan Color"
+  },
+  {
+    "id": "colecovision",
+    "name": "ColecoVision",
+    "libretro_name": "Coleco - ColecoVision"
+  },
+  {
+    "id": "commodore-64",
+    "name": "Commodore 64",
+    "libretro_name": "Commodore - 64"
+  },
+  {
+    "id": "amiga",
+    "name": "Commodore Amiga",
+    "libretro_name": "Commodore - Amiga"
+  },
+  {
+    "id": "amiga-cd32",
+    "name": "Commodore CD32",
+    "libretro_name": "Commodore - CD32"
+  },
+  {
+    "id": "commodore-cdtv",
+    "name": "Commodore CDTV",
+    "libretro_name": "Commodore - CDTV"
+  },
+  {
+    "id": "commodore-vic-20",
+    "name": "Commodore VIC-20",
+    "libretro_name": "Commodore - VIC-20"
+  },
+  {
+    "id": "dos",
+    "name": "DOS",
+    "libretro_name": "DOS"
+  },
+  {
+    "id": "arcadia-2001",
+    "name": "Emerson Arcadia 2001",
+    "libretro_name": "Emerson - Arcadia 2001"
+  },
+  {
+    "id": "channel-f",
+    "name": "Fairchild Channel F",
+    "libretro_name": "Fairchild - Channel F"
+  },
+  {
+    "id": "fm-towns",
+    "name": "Fujitsu FM Towns",
+    "libretro_name": "Fujitsu - FM Towns"
+  },
+  {
+    "id": "vectrex",
+    "name": "GCE Vectrex",
+    "libretro_name": "GCE - Vectrex"
+  },
+  {
+    "id": "odyssey2",
+    "name": "Magnavox Odyssey2",
+    "libretro_name": "Magnavox - Odyssey2"
+  },
+  {
+    "id": "intellivision",
+    "name": "Mattel Intellivision",
+    "libretro_name": "Mattel - Intellivision"
+  },
+  {
+    "id": "msx",
+    "name": "MSX",
+    "libretro_name": "Microsoft - MSX"
+  },
+  {
+    "id": "msx2",
+    "name": "MSX2",
+    "libretro_name": "Microsoft - MSX2"
+  },
+  {
+    "id": "xbox",
+    "name": "Microsoft Xbox",
+    "libretro_name": "Microsoft - Xbox"
+  },
+  {
+    "id": "pc-engine",
+    "name": "PC Engine / TurboGrafx-16",
+    "libretro_name": "NEC - PC Engine - TurboGrafx 16"
+  },
+  {
+    "id": "pc-engine-cd",
+    "name": "PC Engine CD / TurboGrafx-CD",
+    "libretro_name": "NEC - PC Engine CD - TurboGrafx-CD"
+  },
+  {
+    "id": "supergrafx",
+    "name": "PC Engine SuperGrafx",
+    "libretro_name": "NEC - PC Engine SuperGrafx"
+  },
+  {
+    "id": "pc-88",
+    "name": "NEC PC-88",
+    "libretro_name": "NEC - PC-88"
+  },
+  {
+    "id": "pc-98",
+    "name": "NEC PC-98",
+    "libretro_name": "NEC - PC-98"
+  },
+  {
+    "id": "pc-fx",
+    "name": "NEC PC-FX",
+    "libretro_name": "NEC - PC-FX"
+  },
+  {
+    "id": "famicom-disk-system",
+    "name": "Family Computer Disk System",
+    "libretro_name": "Nintendo - Family Computer Disk System"
+  },
+  {
+    "id": "game-boy",
+    "name": "Game Boy",
+    "libretro_name": "Nintendo - Game Boy"
+  },
+  {
+    "id": "game-boy-color",
+    "name": "Game Boy Color",
+    "libretro_name": "Nintendo - Game Boy Color"
+  },
+  {
+    "id": "game-boy-advance",
+    "name": "Game Boy Advance",
+    "libretro_name": "Nintendo - Game Boy Advance"
+  },
+  {
+    "id": "gamecube",
+    "name": "Nintendo GameCube",
+    "libretro_name": "Nintendo - GameCube"
+  },
+  {
+    "id": "nintendo-3ds",
+    "name": "Nintendo 3DS",
+    "libretro_name": "Nintendo - Nintendo 3DS"
+  },
+  {
+    "id": "nintendo-64",
+    "name": "Nintendo 64",
+    "libretro_name": "Nintendo - Nintendo 64"
+  },
+  {
+    "id": "nintendo-64dd",
+    "name": "Nintendo 64DD",
+    "libretro_name": "Nintendo - Nintendo 64DD"
+  },
+  {
+    "id": "nintendo-ds",
+    "name": "Nintendo DS",
+    "libretro_name": "Nintendo - Nintendo DS"
+  },
+  {
+    "id": "nintendo-dsi",
+    "name": "Nintendo DSi",
+    "libretro_name": "Nintendo - Nintendo DSi"
+  },
+  {
+    "id": "nes",
+    "name": "Nintendo Entertainment System",
+    "libretro_name": "Nintendo - Nintendo Entertainment System"
+  },
+  {
+    "id": "pokemon-mini",
+    "name": "Pokemon Mini",
+    "libretro_name": "Nintendo - Pokemon Mini"
+  },
+  {
+    "id": "satellaview",
+    "name": "Nintendo Satellaview",
+    "libretro_name": "Nintendo - Satellaview"
+  },
+  {
+    "id": "sufami-turbo",
+    "name": "Nintendo Sufami Turbo",
+    "libretro_name": "Nintendo - Sufami Turbo"
+  },
+  {
+    "id": "snes",
+    "name": "Super Nintendo Entertainment System",
+    "libretro_name": "Nintendo - Super Nintendo Entertainment System"
+  },
+  {
+    "id": "virtual-boy",
+    "name": "Nintendo Virtual Boy",
+    "libretro_name": "Nintendo - Virtual Boy"
+  },
+  {
+    "id": "wii",
+    "name": "Nintendo Wii",
+    "libretro_name": "Nintendo - Wii"
+  },
+  {
+    "id": "wii-digital",
+    "name": "Nintendo Wii (Digital)",
+    "libretro_name": "Nintendo - Wii (Digital)"
+  },
+  {
+    "id": "cd-i",
+    "name": "Philips CD-i",
+    "libretro_name": "Philips - CD-i"
+  },
+  {
+    "id": "neo-geo",
+    "name": "SNK Neo Geo",
+    "libretro_name": "SNK - Neo Geo"
+  },
+  {
+    "id": "neo-geo-cd",
+    "name": "SNK Neo Geo CD",
+    "libretro_name": "SNK - Neo Geo CD"
+  },
+  {
+    "id": "neo-geo-pocket",
+    "name": "SNK Neo Geo Pocket",
+    "libretro_name": "SNK - Neo Geo Pocket"
+  },
+  {
+    "id": "neo-geo-pocket-color",
+    "name": "SNK Neo Geo Pocket Color",
+    "libretro_name": "SNK - Neo Geo Pocket Color"
+  },
+  {
+    "id": "sega-32x",
+    "name": "Sega 32X",
+    "libretro_name": "Sega - 32X"
+  },
+  {
+    "id": "dreamcast",
+    "name": "Sega Dreamcast",
+    "libretro_name": "Sega - Dreamcast"
+  },
+  {
+    "id": "game-gear",
+    "name": "Sega Game Gear",
+    "libretro_name": "Sega - Game Gear"
+  },
+  {
+    "id": "master-system",
+    "name": "Sega Master System / Mark III",
+    "libretro_name": "Sega - Master System - Mark III"
+  },
+  {
+    "id": "mega-drive",
+    "name": "Sega Mega Drive / Genesis",
+    "libretro_name": "Sega - Mega Drive - Genesis"
+  },
+  {
+    "id": "sega-cd",
+    "name": "Sega Mega-CD / Sega CD",
+    "libretro_name": "Sega - Mega-CD - Sega CD"
+  },
+  {
+    "id": "naomi",
+    "name": "Sega Naomi",
+    "libretro_name": "Sega - Naomi"
+  },
+  {
+    "id": "naomi-2",
+    "name": "Sega Naomi 2",
+    "libretro_name": "Sega - Naomi 2"
+  },
+  {
+    "id": "sg-1000",
+    "name": "Sega SG-1000",
+    "libretro_name": "Sega - SG-1000"
+  },
+  {
+    "id": "saturn",
+    "name": "Sega Saturn",
+    "libretro_name": "Sega - Saturn"
+  },
+  {
+    "id": "sharp-x1",
+    "name": "Sharp X1",
+    "libretro_name": "Sharp - X1"
+  },
+  {
+    "id": "x68000",
+    "name": "Sharp X68000",
+    "libretro_name": "Sharp - X68000"
+  },
+  {
+    "id": "zx-81",
+    "name": "Sinclair ZX 81",
+    "libretro_name": "Sinclair - ZX 81"
+  },
+  {
+    "id": "zx-spectrum",
+    "name": "Sinclair ZX Spectrum",
+    "libretro_name": "Sinclair - ZX Spectrum"
+  },
+  {
+    "id": "zx-spectrum-plus-3",
+    "name": "Sinclair ZX Spectrum +3",
+    "libretro_name": "Sinclair - ZX Spectrum +3"
+  },
+  {
+    "id": "playstation",
+    "name": "PlayStation",
+    "libretro_name": "Sony - PlayStation"
+  },
+  {
+    "id": "playstation-2",
+    "name": "PlayStation 2",
+    "libretro_name": "Sony - PlayStation 2"
+  },
+  {
+    "id": "playstation-3",
+    "name": "PlayStation 3",
+    "libretro_name": "Sony - PlayStation 3"
+  },
+  {
+    "id": "playstation-3-psn",
+    "name": "PlayStation 3 (PSN)",
+    "libretro_name": "Sony - PlayStation 3 (PSN)"
+  },
+  {
+    "id": "psp",
+    "name": "PlayStation Portable",
+    "libretro_name": "Sony - PlayStation Portable"
+  },
+  {
+    "id": "psp-psn",
+    "name": "PlayStation Portable (PSN)",
+    "libretro_name": "Sony - PlayStation Portable (PSN)"
+  },
+  {
+    "id": "playstation-vita",
+    "name": "PlayStation Vita",
+    "libretro_name": "Sony - PlayStation Vita"
+  },
+  {
+    "id": "3do",
+    "name": "3DO",
+    "libretro_name": "The 3DO Company - 3DO"
+  }
+]

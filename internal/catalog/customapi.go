@@ -7,54 +7,14 @@ import (
 	"net/url"
 	"os"
 	"strconv"
-	"unicode"
-	"unicode/utf8"
 
 	"retroarch-marketplace/internal/content"
+	"retroarch-marketplace/internal/store"
 )
-
-func foldEqual(a, b rune) bool {
-	if a == b {
-		return true
-	}
-	for r := unicode.SimpleFold(a); r != a; r = unicode.SimpleFold(r) {
-		if r == b {
-			return true
-		}
-	}
-	return false
-}
-
-func containsFold(s, query string) bool {
-	if query == "" {
-		return true
-	}
-	needle := []rune(query)
-	for i := range s {
-		rest := s[i:]
-		matched := true
-		for _, want := range needle {
-			if rest == "" {
-				matched = false
-				break
-			}
-			got, size := utf8.DecodeRuneInString(rest)
-			if !foldEqual(got, want) {
-				matched = false
-				break
-			}
-			rest = rest[size:]
-		}
-		if matched {
-			return true
-		}
-	}
-	return false
-}
 
 func (s *Server) serveCustomAPI(w http.ResponseWriter, r *http.Request, snapshot *catalogSnapshot, path string, item content.Item, isPackage bool) {
 	if isPackage {
-		packagePath, err := s.archive(snapshot.fingerprint, item)
+		packagePath, err := s.archive(item)
 		if err != nil {
 			http.Error(w, "package unavailable", http.StatusInternalServerError)
 			return
@@ -93,22 +53,17 @@ func (s *Server) serveCustomAPI(w http.ResponseWriter, r *http.Request, snapshot
 			*dst = n
 		}
 	}
-	results := make([]map[string]json.RawMessage, 0)
-	for _, g := range snapshot.games {
-		if platform != "" && g.platform != platform {
-			continue
+	ids, err := s.store.GameIDs(r.Context(), store.Filter{Query: query, LibretroName: platform, AvailableOnly: true, Skip: skip, Count: count})
+	if err != nil {
+		http.Error(w, "catalog unavailable", http.StatusInternalServerError)
+		return
+	}
+	results := make([]map[string]json.RawMessage, 0, len(ids))
+	for _, id := range ids {
+		// Games the snapshot lacks became available after it was built; the next request includes them.
+		if g, ok := snapshot.byID[id]; ok {
+			results = append(results, g.fields)
 		}
-		if !containsFold(g.canonical, query) && !containsFold(g.display, query) {
-			continue
-		}
-		if skip > 0 {
-			skip--
-			continue
-		}
-		if count >= 0 && len(results) >= count {
-			break
-		}
-		results = append(results, g.fields)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(results)

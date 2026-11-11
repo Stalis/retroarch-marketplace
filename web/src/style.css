@@ -156,14 +156,6 @@ h2 { font-size: 16px; letter-spacing: -0.01em; margin: 0; }
   background: #dbeafe;
   color: #1d4ed8;
 }
-.tab-error {
-  background: #fee2e2;
-  color: #dc2626;
-  font-size: 11px;
-  font-weight: 800;
-  padding: 1px 6px;
-  border-radius: 10px;
-}
 
 /* Layout Panels */
 .workspace {
@@ -261,39 +253,11 @@ h2 { font-size: 16px; letter-spacing: -0.01em; margin: 0; }
 }
 
 /* Details Panel */
-.details dl {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  margin: 16px 0;
-  padding: 12px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 6px;
-}
-.details dt {
-  color: #64748b;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  margin-bottom: 2px;
-}
-.details dd {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 600;
-  color: #1e293b;
-  overflow-wrap: anywhere;
-}
 .details label {
   display: block;
   font-size: 12px;
   font-weight: 600;
   margin-bottom: 6px;
-}
-.details label span {
-  color: #64748b;
-  font-weight: 400;
 }
 .details input {
   width: 100%;
@@ -417,29 +381,6 @@ h2 { font-size: 16px; letter-spacing: -0.01em; margin: 0; }
   font-weight: 500;
   cursor: pointer;
 }
-
-/* JSON Editor */
-.json-heading {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-.json-panel textarea {
-  display: block;
-  width: 100%;
-  min-height: 480px;
-  resize: vertical;
-  border: 1px solid #cbd5e1;
-  border-radius: 6px;
-  background: #f8fafc;
-  color: #0f172a;
-  padding: 12px;
-  font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
-  tab-size: 2;
-}
-.json-panel textarea[aria-invalid=true] { border-color: #ef4444; }
 
 /* Alerts and Notices */
 .alert {

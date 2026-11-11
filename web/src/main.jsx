@@ -1,403 +1,368 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { addGame, addPlatform, formatManifest, parseManifest, updateCanonicalName } from './manifest.js';
-import { knownPlatforms } from './platforms.js';
+import { validateGame } from './game.js';
 import { initialLocale, messages, persistLocale } from './i18n.js';
 import './style.css';
 
-const endpoint = '/api/admin/manifest';
+const api = '/api/admin';
+const pageSize = 50;
+const json = { 'Content-Type': 'application/json' };
+const gamePath = id => `${api}/games/${encodeURIComponent(id)}`;
 
-// Public catalog as RetroArch sees it; null when unavailable (the editor still works).
-async function fetchServed() {
-  try {
-    const [platforms, games] = await Promise.all(['/api/platforms', '/api/games'].map(async url => {
-      const response = await fetch(url, { cache: 'no-store' });
-      if (!response.ok) throw new Error(url);
-      return response.json();
-    }));
-    const counts = Object.create(null);
-    for (const game of games) counts[game.platform.libretro_name] = (counts[game.platform.libretro_name] || 0) + 1;
-    return { platforms: platforms.map(platform => platform.libretro_name), counts };
-  } catch { return null; }
-}
-const display = (value, fallback) => typeof value === 'string' && value ? value : fallback;
 const blankDisc = () => ({ entrypoint: '', files: [{ source: '', path: '' }] });
 const blankGame = () => ({ id: '', canonical_name: '', display_name: '', platform_id: '', playlist: '', discs: [blankDisc()] });
+// The form keeps optional fields as '' so inputs stay controlled; the API omits them.
+const toForm = game => ({ ...game, display_name: game.display_name ?? '', playlist: game.playlist ?? '' });
+const toBody = ({ display_name, playlist, ...game }) => ({ ...game, ...(display_name ? { display_name } : {}), ...(playlist ? { playlist } : {}) });
 
 async function responseError(response) {
-  const body = await response.text();
-  let detail = body.trim();
-  try {
-    const json = JSON.parse(body);
-    detail = typeof json === 'string' ? json : json.error || json.message || body;
-  } catch { /* Plain text is also a valid error response. */ }
-  return { status: response.status, detail };
+  return { status: response.status, detail: (await response.text()).trim() };
+}
+
+async function getJSON(url) {
+  const response = await fetch(url, { cache: 'no-store' });
+  if (!response.ok) throw await responseError(response);
+  return response;
 }
 
 function message(value, t) {
   if (typeof value === 'string') return t[value] || value;
   if (!value) return '';
   const { status, detail } = value;
-  if (status === 409 || status === 412) return t.conflict + (detail ? ` ${detail}` : '');
+  if (status === 412) return t.conflict;
   if (status === 403) return t.forbidden + (detail ? ` ${detail}` : '');
+  if (status === 400 || status === 409) return detail || t.serverError(status);
   return t.serverError(status) + (detail ? `: ${detail}` : `. ${t.retry}`);
 }
+
+const networkOr = (err, key) => err instanceof TypeError ? key : err;
 
 function App() {
   const [locale, setLocale] = useState(initialLocale);
   const t = messages[locale];
-  const [text, setText] = useState('');
-  const [savedText, setSavedText] = useState('');
-  const [etag, setEtag] = useState('');
-  const [selected, setSelected] = useState(0);
-  const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState('games');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const [loaded, setLoaded] = useState(false);
-  const [served, setServed] = useState(null);
+  const [serverVersion, setServerVersion] = useState('');
+  const [platforms, setPlatforms] = useState([]);
+  const [known, setKnown] = useState([]);
+  const [query, setQuery] = useState('');
+  const [games, setGames] = useState([]);
+  const [hasMore, setHasMore] = useState(false);
+  const [editing, setEditing] = useState(null); // { id, etag, available } of the loaded game; null = new game
+  const [draft, setDraft] = useState(blankGame);
+  const [savedDraft, setSavedDraft] = useState(() => JSON.stringify(blankGame()));
+  const [gameError, setGameError] = useState('');
+  const [missing, setMissing] = useState(null);
+  const [conflict, setConflict] = useState(false);
+  const [lookup, setLookup] = useState(null);
   const [platformMode, setPlatformMode] = useState('preset');
   const [preset, setPreset] = useState('');
   const [customPlatform, setCustomPlatform] = useState({ id: '', name: '', libretro_name: '' });
   const [platformError, setPlatformError] = useState('');
   const [addedPlatform, setAddedPlatform] = useState('');
-  const [newGame, setNewGame] = useState(blankGame);
-  const [gameReplacement, setGameReplacement] = useState(null);
-  const [gameError, setGameError] = useState('');
-  const [missing, setMissing] = useState(null);
-  const [serverVersion, setServerVersion] = useState('');
-  const [lookup, setLookup] = useState(null);
-  const [lookupBusy, setLookupBusy] = useState(false);
-  const dirty = loaded && text !== savedText;
-  const gameDraftDirty = JSON.stringify(newGame) !== (gameReplacement ? gameReplacement.draft : JSON.stringify(blankGame()));
-  const parsed = parseManifest(text);
-  const manifest = parsed.value;
-  const games = Array.isArray(manifest?.contents) ? manifest.contents : [];
-  const platforms = Array.isArray(manifest?.platforms) ? manifest.platforms : [];
-  const game = games[selected];
-  const platformName = (id) => display(platforms.find(platform => platform?.id === id)?.name, display(id, t.notSpecified));
-  const libretroName = platforms.find(platform => platform?.id === game?.platform_id)?.libretro_name;
-  const lookupCurrent = lookup && lookup.selected === selected && lookup.name === game?.canonical_name && lookup.platform === libretroName;
+  const listRequest = useRef(0);
+  const dirty = JSON.stringify(draft) !== savedDraft;
+  const platformOf = id => platforms.find(platform => platform.id === id);
+  const libretroName = platformOf(draft.platform_id)?.libretro_name;
+  const lookupCurrent = lookup && lookup.name === draft.canonical_name && lookup.platform === libretroName;
 
   useEffect(() => { document.documentElement.lang = locale; document.title = t.title; persistLocale(locale); }, [locale]);
-
   useEffect(() => {
-    function warn(event) {
-      if (dirty || gameDraftDirty) { event.preventDefault(); event.returnValue = ''; }
-    }
+    function warn(event) { if (dirty) { event.preventDefault(); event.returnValue = ''; } }
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
-  }, [dirty, gameDraftDirty]);
-  useEffect(() => { setMissing(null); }, [text, etag, newGame]);
+  }, [dirty]);
+  useEffect(() => { setMissing(null); }, [draft]);
 
-  async function load(confirmDiscard = true) {
-    if (confirmDiscard && (dirty || gameDraftDirty) && !window.confirm(t.discard)) return;
-    setBusy(true); setError(''); setNotice(''); setMissing(null);
-    const servedRequest = fetchServed();
-    try {
-      const response = await fetch(endpoint, { cache: 'no-store' });
-      if (!response.ok) throw await responseError(response);
-      const body = await response.text();
-      const revision = response.headers.get('ETag');
-      if (!revision) throw new Error('noEtag');
-      const formatted = formatManifest(body);
-      setText(formatted); setSavedText(formatted); setEtag(revision); setLoaded(true); setSelected(0);
-      const ver = response.headers.get('X-Catalog-Version');
-      if (ver) setServerVersion(ver);
-      setGameReplacement(null); setNewGame(blankGame()); setGameError('');
-      setNotice('loaded'); setAddedPlatform(''); setPlatformError(''); setServed(await servedRequest);
-    } catch (err) {
-      setError(err instanceof TypeError ? 'loadNetwork' : err instanceof Error ? err.message : err);
-    } finally { setBusy(false); }
+  async function run(action, networkKey = 'loadNetwork') {
+    setBusy(true); setError(''); setNotice('');
+    try { await action(); } catch (err) { setError(networkOr(err, networkKey)); } finally { setBusy(false); }
   }
 
-  useEffect(() => { load(false); }, []);
-
-  async function save(approval = null) {
-    if (parsed.error || !etag) return;
-    if (approval && (approval.text !== text || approval.etag !== etag)) {
-      setMissing(null); setError('staleApproval'); return;
-    }
-    if (gameReplacement && gameReplacement.draft !== JSON.stringify(newGame)) {
-      setMissing(null); setError('changedDraft'); return;
-    }
-    const submitted = text;
-    const revisionAtSubmit = etag;
-    setBusy(true); setError(''); setNotice(''); setMissing(null);
-    try {
-      const response = await fetch(endpoint + (approval ? '?allow_missing=1' : ''), {
-        method: 'PUT', headers: { 'Content-Type': 'application/json', 'If-Match': revisionAtSubmit }, body: submitted,
-      });
-      if (response.status === 422 && !approval) {
-        const body = await response.clone().json().catch(() => null);
-        if (Array.isArray(body?.missing) && body.missing.length && body.missing.every(item => typeof item?.id === 'string' && typeof item?.path === 'string')) {
-          setMissing({ text: submitted, etag: revisionAtSubmit, files: body.missing }); return;
-        }
-      }
-      if (!response.ok) throw await responseError(response);
-      const revision = response.headers.get('ETag');
-      if (!revision) {
-        setEtag('');
-        throw new Error('savedNoEtag');
-      }
-      const saved = response.status === 200 ? formatManifest(await response.text()) : submitted;
-      setText(saved); setEtag(revision); setSavedText(saved); setNotice('savedNotice'); setAddedPlatform('');
-      if (gameReplacement && gameReplacement.draft === JSON.stringify(newGame)) setNewGame(blankGame());
-      setGameReplacement(null); setServed(await fetchServed());
-    } catch (err) {
-      setError(err instanceof TypeError ? 'saveNetwork' : err instanceof Error ? err.message : err);
-    } finally { setBusy(false); }
+  async function loadPlatforms() {
+    const response = await getJSON(`${api}/platforms`);
+    setServerVersion(response.headers.get('X-Catalog-Version') || '');
+    setPlatforms(await response.json());
   }
 
-  function changeName(value) {
-    const updated = updateCanonicalName(text, selected, value);
-    if (updated === text && value !== game?.canonical_name) {
-      setError('nameError');
-    } else { setText(updated); setError(''); setNotice(''); }
+  async function loadGames(skip = 0) {
+    const request = ++listRequest.current;
+    const params = new URLSearchParams({ q: query, skip, count: pageSize });
+    const page = await (await getJSON(`${api}/games?${params}`)).json();
+    if (request !== listRequest.current) return; // a newer search superseded this one
+    setGames(current => skip ? [...current, ...page] : page);
+    setHasMore(page.length === pageSize);
+  }
+
+  useEffect(() => {
+    run(async () => {
+      await loadPlatforms();
+      setKnown(await (await getJSON(`${api}/known-platforms`)).json());
+    });
+  }, []);
+  useEffect(() => {
+    const timer = setTimeout(() => loadGames().catch(err => setError(networkOr(err, 'loadNetwork'))), 300);
+    return () => clearTimeout(timer);
+  }, [query]);
+
+  function setForm(game, current) {
+    const form = toForm(game);
+    setDraft(form); setSavedDraft(JSON.stringify(form)); setEditing(current);
+    setGameError(''); setMissing(null); setConflict(false); setLookup(null);
+  }
+
+  async function fetchGame(id) {
+    const response = await getJSON(gamePath(id));
+    const body = await response.json();
+    setForm(body.game, { id, etag: response.headers.get('ETag'), available: body.available });
+  }
+
+  async function openGame(id, confirmDiscard = true) {
+    if (confirmDiscard && dirty && !window.confirm(t.discard)) return;
+    await run(() => fetchGame(id));
+  }
+
+  function newGame() {
+    if (dirty && !window.confirm(t.discard)) return;
+    setForm(blankGame(), null);
+  }
+
+  async function save(allowMissing = false) {
+    const invalid = validateGame(draft, locale);
+    if (invalid) { setGameError(invalid); return; }
+    setGameError('');
+    const suffix = allowMissing ? '?allow_missing=1' : '';
+    await run(async () => {
+      const response = editing
+        ? await fetch(gamePath(editing.id) + suffix, { method: 'PUT', headers: { ...json, 'If-Match': editing.etag }, body: JSON.stringify(toBody(draft)) })
+        : await fetch(`${api}/games${suffix}`, { method: 'POST', headers: json, body: JSON.stringify(toBody(draft)) });
+      if (response.status === 422 && !allowMissing) {
+        const body = await response.json().catch(() => null);
+        if (Array.isArray(body?.missing)) { setMissing(body.missing); return; }
+      }
+      if (response.status === 412) { setConflict(true); return; }
+      if (!response.ok) throw await responseError(response);
+      await Promise.all([fetchGame(draft.id), loadGames(), loadPlatforms()]);
+      setNotice('savedNotice');
+    }, 'saveNetwork');
+  }
+
+  async function deleteGame() {
+    if (!window.confirm(t.confirmDelete)) return;
+    await run(async () => {
+      const response = await fetch(gamePath(editing.id), { method: 'DELETE', headers: { 'If-Match': editing.etag } });
+      if (response.status === 412) { setConflict(true); return; }
+      if (!response.ok) throw await responseError(response);
+      setForm(blankGame(), null);
+      await Promise.all([loadGames(), loadPlatforms()]);
+      setNotice('savedNotice');
+    }, 'saveNetwork');
   }
 
   async function findCanonicalNames() {
-    const request = { selected, name: game.canonical_name, platform: libretroName };
-    setLookupBusy(true); setLookup({ ...request, status: 'loading' });
+    const request = { name: draft.canonical_name, platform: libretroName };
+    setLookup({ ...request, status: 'loading' });
     try {
       const params = new URLSearchParams({ platform: request.platform, q: request.name });
-      const response = await fetch(`/api/admin/canonical-names?${params}`);
+      const response = await fetch(`${api}/canonical-names?${params}`);
       if (!response.ok) throw new Error('lookup');
       const candidates = await response.json();
       if (!Array.isArray(candidates) || !candidates.every(name => typeof name === 'string')) throw new Error('lookup');
       setLookup({ ...request, status: 'done', candidates });
     } catch {
       setLookup({ ...request, status: 'error' });
-    } finally { setLookupBusy(false); }
+    }
   }
 
-  function submitPlatform(event) {
+  async function submitPlatform(event) {
     event.preventDefault();
-    const platform = platformMode === 'preset'
-      ? knownPlatforms.find(item => item.libretro_name === preset)
-      : customPlatform;
+    const platform = platformMode === 'preset' ? known.find(item => item.libretro_name === preset) : customPlatform;
     if (!platform) { setPlatformError('choosePlatformError'); return; }
-    const result = addPlatform(text, platform, locale);
-    if (result.error) { setPlatformError(result.error); return; }
-    setText(result.text); setPlatformError(''); setError(''); setNotice('');
-    setAddedPlatform(`${platform.name} (${platform.id}; ${platform.libretro_name})`);
+    setPlatformError(''); setAddedPlatform('');
+    await run(async () => {
+      const response = await fetch(`${api}/platforms`, { method: 'POST', headers: json, body: JSON.stringify(platform) });
+      if (!response.ok) { setPlatformError(await responseError(response)); return; }
+      setAddedPlatform(`${platform.name} (${platform.id}; ${platform.libretro_name})`);
+      await loadPlatforms();
+    }, 'saveNetwork');
   }
 
-  function submitGame(event) {
-    event.preventDefault();
-    const result = addGame(text, newGame, gameReplacement, locale);
-    if (result.error) { setGameError(result.error); return; }
-    setText(result.text); setSelected(result.replacement.index); setGameReplacement({ ...result.replacement, draft: JSON.stringify(newGame) }); setGameError(''); setError(''); setNotice('gameAdded');
+  async function deletePlatform(id) {
+    setAddedPlatform(''); setPlatformError('');
+    await run(async () => {
+      const response = await fetch(`${api}/platforms/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      if (response.status === 409) { setError('platformInUse'); return; }
+      if (!response.ok) throw await responseError(response);
+      await loadPlatforms();
+    }, 'saveNetwork');
   }
 
   function updateDisc(index, change) {
-    setNewGame(current => ({ ...current, discs: current.discs.map((disc, i) => i === index ? { ...disc, ...change } : disc) }));
+    setDraft(current => ({ ...current, discs: current.discs.map((disc, i) => i === index ? { ...disc, ...change } : disc) }));
   }
-
-  function formatCurrentJson() {
-    if (parsed.error) return;
-    setText(formatManifest(text));
-  }
-
-  const filteredGames = games
-    .map((item, index) => ({ item, index }))
-    .filter(({ item }) => {
-      if (!searchQuery.trim()) return true;
-      const q = searchQuery.toLowerCase();
-      return (item?.canonical_name && String(item.canonical_name).toLowerCase().includes(q)) ||
-        (item?.id && String(item.id).toLowerCase().includes(q)) ||
-        (item?.display_name && String(item.display_name).toLowerCase().includes(q));
-    });
 
   return <div className="app">
     <header className="header">
       <div><p className="eyebrow">RETROARCH MARKETPLACE{serverVersion ? ` • ${serverVersion}` : ''}</p><h1>{t.title}</h1><p className="subtitle">{t.subtitle}</p></div>
       <div className="header-actions">
-        <label className="language-selector">{t.language} <select value={locale} onChange={event => { setLocale(event.target.value); setPlatformError(''); setGameError(''); }}><option value="ru">Русский</option><option value="en">English</option></select></label>
-        <span className={`status ${dirty ? 'unsaved' : ''}`} role="status">{!loaded ? t.noData : dirty ? t.unsaved : t.saved}</span>
-        <button className="secondary" onClick={() => load()} disabled={busy}>{t.reload}</button>
-        <button className="primary" onClick={() => save()} disabled={busy || !dirty || !!parsed.error || !etag}>{t.save}</button>
+        <label className="language-selector">{t.language} <select value={locale} onChange={event => { setLocale(event.target.value); setGameError(''); }}><option value="ru">Русский</option><option value="en">English</option></select></label>
       </div>
     </header>
     <main>
       {error && <div className="alert error" role="alert">{message(error, t)}</div>}
       {notice && <div className="alert success" role="status">{message(notice, t)}</div>}
-      {missing && <section className="alert error" aria-labelledby="missing-heading">
-        <h2 id="missing-heading">{t.missingTitle}</h2>
-        <p>{t.missingWarning}</p>
-        <ul>{missing.files.map((file, index) => <li key={index}>{file.id}: {file.path}</li>)}</ul>
-        <button className="secondary" disabled={busy} onClick={() => save(missing)}>{t.saveAnyway}</button>{' '}
-        <button className="secondary" disabled={busy} onClick={() => { setMissing(null); if (gameReplacement) document.getElementById('game-id')?.focus(); }}>{t.backEdit}</button>
-      </section>}
       {busy && <p role="status" className="working">{t.working}</p>}
-      {loaded && <>
-        <nav className="tab-bar" aria-label="Sections">
-          <button type="button" className={`tab-item ${activeTab === 'games' ? 'active' : ''}`} onClick={() => setActiveTab('games')}>
-            {t.tabGames} <span className="tab-count">{games.length}</span>
-          </button>
-          <button type="button" className={`tab-item ${activeTab === 'platforms' ? 'active' : ''}`} onClick={() => setActiveTab('platforms')}>
-            {t.tabPlatforms} <span className="tab-count">{platforms.length}</span>
-          </button>
-          <button type="button" className={`tab-item ${activeTab === 'json' ? 'active' : ''}`} onClick={() => setActiveTab('json')}>
-            {t.tabJson} {parsed.error && <span className="tab-error">!</span>}
-          </button>
-        </nav>
+      <nav className="tab-bar" aria-label="Sections">
+        <button type="button" className={`tab-item ${activeTab === 'games' ? 'active' : ''}`} onClick={() => setActiveTab('games')}>{t.tabGames}</button>
+        <button type="button" className={`tab-item ${activeTab === 'platforms' ? 'active' : ''}`} onClick={() => setActiveTab('platforms')}>
+          {t.tabPlatforms} <span className="tab-count">{platforms.length}</span>
+        </button>
+      </nav>
 
-        {activeTab === 'games' && <>
-          <section className="workspace" aria-label={t.catalogGames}>
-            <aside className="panel games-panel">
-              <div className="panel-heading">
-                <div><p className="eyebrow">{t.catalog}</p><h2>{t.games}</h2></div>
-                <span className="count">{games.length}</span>
+      {activeTab === 'games' && <section className="workspace" aria-label={t.catalogGames}>
+        <aside className="panel games-panel">
+          <div className="panel-heading">
+            <div><p className="eyebrow">{t.catalog}</p><h2>{t.games}</h2></div>
+            <button type="button" className="secondary btn-small" onClick={newGame} disabled={busy}>{t.addGame}</button>
+          </div>
+          <div className="search-box">
+            <input type="search" className="search-input" placeholder={t.searchPlaceholder} aria-label={t.searchPlaceholder} value={query} onChange={event => setQuery(event.target.value)} />
+          </div>
+          {games.length === 0 ? <p className="muted">{query ? t.noSearchResults : t.noGames}</p> :
+            <div className="game-list">{games.map(item => <button key={item.id} className={`game-item ${editing?.id === item.id ? 'selected' : ''}`} onClick={() => openGame(item.id)} aria-pressed={editing?.id === item.id}>
+              <span className="game-title">{item.canonical_name}</span>
+              <div className="game-meta">
+                <span className="game-platform">{platformOf(item.platform_id)?.name || item.platform_id}</span>
+                {!item.available && <span className="badge warning">{t.unavailable}</span>}
               </div>
-              <div className="search-box">
-                <input
-                  type="search"
-                  className="search-input"
-                  placeholder={t.searchPlaceholder}
-                  value={searchQuery}
-                  onChange={e => setSearchQuery(e.target.value)}
-                  aria-label={t.searchPlaceholder}
-                />
-              </div>
-              {parsed.error ? <p className="muted">{t.fixGames}</p> : games.length === 0 ? <p className="muted">{t.noGames}</p> :
-                filteredGames.length === 0 ? <p className="muted">{t.noSearchResults}</p> :
-                <div className="game-list">{filteredGames.map(({ item, index }) => <button key={index} className={`game-item ${selected === index ? 'selected' : ''}`} onClick={() => setSelected(index)} aria-pressed={selected === index}>
-                  <span className="game-title">{display(item?.canonical_name, display(item?.id, t.gameNumber(index + 1)))}</span>
-                  <div className="game-meta">
-                    <span className="game-platform">{platformName(item?.platform_id)}</span>
-                    {item?.defer_missing === true && <span className="badge warning">{t.missingAllowedShort}</span>}
-                  </div>
-                </button>)}</div>}
-            </aside>
-            <section className="panel details">
-              <p className="eyebrow">{t.selectedGame}</p><h2>{t.details}</h2>
-              {game && typeof game === 'object' && !Array.isArray(game) ? <>
-                <label htmlFor="canonical">Canonical Name <span>{t.canonicalHint}</span></label>
-                <input id="canonical" value={typeof game.canonical_name === 'string' ? game.canonical_name : ''} onChange={event => changeName(event.target.value)} disabled={busy} />
-                <button className="secondary" type="button" onClick={findCanonicalNames} disabled={busy || lookupBusy || typeof libretroName !== 'string' || !libretroName.trim() || typeof game.canonical_name !== 'string' || !game.canonical_name.trim()}>{t.lookupCanonical}</button>
-                {lookupCurrent && lookup.status === 'loading' && <p role="status">{t.lookupLoading}</p>}
-                {lookupCurrent && lookup.status === 'error' && <p role="alert">{t.lookupError}</p>}
-                {lookupCurrent && lookup.status === 'done' && (lookup.candidates.length === 0 ? <p role="status">{t.lookupEmpty}</p> : <div>{lookup.candidates.map(candidate => <button className="secondary" type="button" key={candidate} disabled={busy} onClick={() => { changeName(candidate); setLookup(null); }}>{candidate}</button>)}</div>)}
-                <dl>
-                  <div><dt>{t.identifier}</dt><dd>{display(game.id, t.notSpecifiedId)}</dd></div>
-                  <div><dt>{t.platform}</dt><dd>{platformName(game.platform_id)}</dd></div>
-                  <div><dt>{t.displayName}</dt><dd>{display(game.display_name, t.notSpecifiedName)}</dd></div>
-                  <div><dt>{t.discs}</dt><dd>{Array.isArray(game.discs) ? game.discs.length : t.notSpecifiedDiscs}</dd></div>
-                </dl>
-                {game.defer_missing === true && <p className="hint">{t.missingAllowed}</p>}
-                <p className="hint">{t.otherFields}</p>
-              </> : <p className="muted">{t.selectGame}</p>}
-            </section>
-          </section>
+            </button>)}</div>}
+          {hasMore && <button type="button" className="secondary btn-small" disabled={busy} onClick={() => run(() => loadGames(games.length))}>{t.loadMore}</button>}
+        </aside>
 
-          <section className="panel game-form-panel" aria-labelledby="add-game-heading">
-            <h2 id="add-game-heading">{t.addGame}</h2>
-            <p className="hint">{t.gameHint}</p>
-            <form onSubmit={submitGame} noValidate>
-              <fieldset disabled={busy}>
-                <legend>{t.gameData}</legend>
-                <div className="grid-fields">
-                  {[['id', 'ID'], ['canonical_name', t.canonicalName], ['display_name', t.displayOptional]].map(([key, label]) => <div key={key}>
-                    <label htmlFor={`game-${key}`}>{label}</label>
-                    <input id={`game-${key}`} value={newGame[key]} onChange={event => setNewGame({ ...newGame, [key]: event.target.value })} />
-                  </div>)}
-                  <div>
-                    <label htmlFor="game-platform">{t.platform}</label>
-                    <select id="game-platform" value={newGame.platform_id} onChange={event => setNewGame({ ...newGame, platform_id: event.target.value })}>
-                      <option value="">{t.choosePlatform}</option>
-                      {platforms.filter(item => typeof item?.id === 'string').map((item, index) => <option key={index} value={item.id}>{display(item.name, item.id)} ({item.id})</option>)}
-                    </select>
-                  </div>
-                </div>
-                {newGame.discs.map((disc, index) => <fieldset className="disc-form" key={index}>
-                  <div className="disc-header">
-                    <legend>{t.disc(index + 1)}</legend>
-                    <button type="button" className="btn-small danger" onClick={() => setNewGame({ ...newGame, discs: newGame.discs.filter((_, i) => i !== index) })}>{t.removeDisc(index + 1)}</button>
-                  </div>
-                  <div className="entrypoint-field">
-                    <label htmlFor={`disc-${index}-entrypoint`}>{t.entrypoint}</label>
-                    <input id={`disc-${index}-entrypoint`} value={disc.entrypoint} onChange={event => updateDisc(index, { entrypoint: event.target.value })} />
-                  </div>
-                  <div className="files-container">
-                    {disc.files.map((file, fileIndex) => <div className="file-row" key={fileIndex}>
-                      <div className="file-inputs">
-                        <div>
-                          <label htmlFor={`disc-${index}-source-${fileIndex}`}>{t.sourceFile(fileIndex + 1)}</label>
-                          <input id={`disc-${index}-source-${fileIndex}`} value={file.source} onChange={event => updateDisc(index, { files: disc.files.map((item, i) => i === fileIndex ? { ...item, source: event.target.value } : item) })} />
-                        </div>
-                        <div>
-                          <label htmlFor={`disc-${index}-path-${fileIndex}`}>{t.filePath(fileIndex + 1)}</label>
-                          <input id={`disc-${index}-path-${fileIndex}`} value={file.path} onChange={event => updateDisc(index, { files: disc.files.map((item, i) => i === fileIndex ? { ...item, path: event.target.value } : item) })} />
-                        </div>
-                      </div>
-                      <button type="button" className="btn-icon danger" title={t.removeFile(fileIndex + 1, index + 1)} onClick={() => updateDisc(index, { files: disc.files.filter((_, i) => i !== fileIndex) })}>✕</button>
-                    </div>)}
-                  </div>
-                  <button type="button" className="secondary btn-small" onClick={() => updateDisc(index, { files: [...disc.files, { source: '', path: '' }] })}>{t.addFile(index + 1)}</button>
-                </fieldset>)}
-                <div className="game-form-actions">
-                  <button type="button" className="secondary btn-small" onClick={() => setNewGame({ ...newGame, discs: [...newGame.discs, blankDisc()] })}>{t.addDisc}</button>
+        <section className="panel details" aria-labelledby="game-heading">
+          <div className="panel-heading">
+            <div><p className="eyebrow">{editing ? editing.id : t.addGame}</p><h2 id="game-heading">{editing ? draft.canonical_name || editing.id : t.gameData}</h2></div>
+            <div className="game-meta">
+              {editing && !editing.available && <span className="badge warning">{t.unavailable}</span>}
+              {dirty && <span className="status unsaved">{t.unsaved}</span>}
+            </div>
+          </div>
+          <p className="hint">{t.gameHint}</p>
+          {conflict && <div className="alert error" role="alert">{t.conflict}{' '}
+            <button type="button" className="secondary btn-small" disabled={busy} onClick={() => openGame(editing.id, false)}>{t.reload}</button>
+          </div>}
+          {missing && <section className="alert error" aria-labelledby="missing-heading">
+            <h2 id="missing-heading">{t.missingTitle}</h2>
+            <p>{t.missingWarning}</p>
+            <ul>{missing.map((file, index) => <li key={index}>{file.id}: {file.path}</li>)}</ul>
+            <button className="secondary" disabled={busy} onClick={() => save(true)}>{t.saveAnyway}</button>{' '}
+            <button className="secondary" disabled={busy} onClick={() => setMissing(null)}>{t.backEdit}</button>
+          </section>}
+          <form className="game-form-panel" onSubmit={event => { event.preventDefault(); save(); }} noValidate>
+            <fieldset disabled={busy}>
+              <div className="grid-fields">
+                <div>
+                  <label htmlFor="game-id">ID</label>
+                  <input id="game-id" value={draft.id} readOnly={!!editing} onChange={event => setDraft({ ...draft, id: event.target.value })} />
                 </div>
                 <div>
-                  <label htmlFor="game-playlist">{newGame.discs.length > 1 ? t.playlistRequired : t.playlistOptional}</label>
-                  <input id="game-playlist" value={newGame.playlist} onChange={event => setNewGame({ ...newGame, playlist: event.target.value })} />
+                  <label htmlFor="game-canonical_name">{t.canonicalName}</label>
+                  <input id="game-canonical_name" value={draft.canonical_name} onChange={event => setDraft({ ...draft, canonical_name: event.target.value })} />
+                  <button className="secondary btn-small" type="button" onClick={findCanonicalNames} disabled={lookup?.status === 'loading' || !libretroName || !draft.canonical_name.trim()}>{t.lookupCanonical}</button>
+                  {lookupCurrent && lookup.status === 'loading' && <p role="status" className="hint">{t.lookupLoading}</p>}
+                  {lookupCurrent && lookup.status === 'error' && <p role="alert" className="hint">{t.lookupError}</p>}
+                  {lookupCurrent && lookup.status === 'done' && (lookup.candidates.length === 0 ? <p role="status" className="hint">{t.lookupEmpty}</p> :
+                    <div>{lookup.candidates.map(candidate => <button className="secondary btn-small" type="button" key={candidate} onClick={() => { setDraft({ ...draft, canonical_name: candidate }); setLookup(null); }}>{candidate}</button>)}</div>)}
                 </div>
-                {gameError && <p className="json-error" role="alert">{message(gameError, t)}</p>}
-                <div className="submit-row">
-                  <button className="primary" type="submit">{gameReplacement ? t.applyGame : t.addGame}</button>
-                  {gameReplacement && <button className="secondary" type="button" onClick={() => { setGameReplacement(null); setNewGame(blankGame()); setGameError(''); }}>{t.anotherGame}</button>}
+                <div>
+                  <label htmlFor="game-display_name">{t.displayOptional}</label>
+                  <input id="game-display_name" value={draft.display_name} onChange={event => setDraft({ ...draft, display_name: event.target.value })} />
                 </div>
-              </fieldset>
-            </form>
-          </section>
-        </>}
-
-        {activeTab === 'platforms' && <section className="panel platform-panel" aria-labelledby="platform-heading">
-          <div className="panel-heading"><div><p className="eyebrow">{t.catalog}</p><h2 id="platform-heading">{t.platforms}</h2></div><span className="count">{platforms.length}</span></div>
-          {parsed.error ? <p className="muted">{t.fixPlatforms}</p> : platforms.length === 0 ? <p className="muted">{t.noPlatforms}</p> :
-            <ul className="platform-list">{platforms.map((item, index) => <li key={index}><strong>{display(item?.name, t.unnamed)}</strong> <span>{display(item?.id, t.noId)} · {display(item?.libretro_name, t.noLibretro)}{served && ` · ${served.platforms.includes(item?.libretro_name) ? t.publishedGames(served.counts[item.libretro_name] || 0) : t.notOnServer}`}</span></li>)}</ul>}
-          <form className="platform-form" onSubmit={submitPlatform}>
-            <fieldset disabled={busy}>
-              <legend>{t.addPlatform}</legend>
-              <div className="platform-modes">
-                <label><input type="radio" name="platform-mode" value="preset" checked={platformMode === 'preset'} onChange={() => { setPlatformMode('preset'); setPlatformError(''); }} /> {t.fromList}</label>
-                <label><input type="radio" name="platform-mode" value="custom" checked={platformMode === 'custom'} onChange={() => { setPlatformMode('custom'); setPlatformError(''); }} /> {t.customPlatform}</label>
+                <div>
+                  <label htmlFor="game-platform">{t.platform}</label>
+                  <select id="game-platform" value={draft.platform_id} onChange={event => setDraft({ ...draft, platform_id: event.target.value })}>
+                    <option value="">{t.choosePlatform}</option>
+                    {platforms.map(item => <option key={item.id} value={item.id}>{item.name} ({item.id})</option>)}
+                  </select>
+                </div>
               </div>
-              {platformMode === 'preset' ? <>
-                <label htmlFor="platform-preset">{t.platformLibretro}</label>
-                <select id="platform-preset" value={preset} onChange={event => setPreset(event.target.value)}>
-                  <option value="">{t.choosePlatform}</option>
-                  {knownPlatforms.map(item => <option key={item.libretro_name} value={item.libretro_name}>{item.libretro_name}</option>)}
-                </select>
-              </> : <>
-                {[['id', 'ID'], ['name', t.name], ['libretro_name', 'Libretro name']].map(([key, label]) => <div key={key}>
-                  <label htmlFor={`platform-${key}`}>{label}</label>
-                  <input id={`platform-${key}`} value={customPlatform[key]} onChange={event => setCustomPlatform({ ...customPlatform, [key]: event.target.value })} />
-                </div>)}
-              </>}
-              <button className="primary" type="submit">{t.addPlatform}</button>
+              {draft.discs.map((disc, index) => <fieldset className="disc-form" key={index}>
+                <div className="disc-header">
+                  <legend>{t.disc(index + 1)}</legend>
+                  <button type="button" className="btn-small danger" onClick={() => setDraft({ ...draft, discs: draft.discs.filter((_, i) => i !== index) })}>{t.removeDisc(index + 1)}</button>
+                </div>
+                <div className="entrypoint-field">
+                  <label htmlFor={`disc-${index}-entrypoint`}>{t.entrypoint}</label>
+                  <input id={`disc-${index}-entrypoint`} value={disc.entrypoint} onChange={event => updateDisc(index, { entrypoint: event.target.value })} />
+                </div>
+                <div className="files-container">
+                  {disc.files.map((file, fileIndex) => <div className="file-row" key={fileIndex}>
+                    <div className="file-inputs">
+                      <div>
+                        <label htmlFor={`disc-${index}-source-${fileIndex}`}>{t.sourceFile(fileIndex + 1)}</label>
+                        <input id={`disc-${index}-source-${fileIndex}`} value={file.source} onChange={event => updateDisc(index, { files: disc.files.map((item, i) => i === fileIndex ? { ...item, source: event.target.value } : item) })} />
+                      </div>
+                      <div>
+                        <label htmlFor={`disc-${index}-path-${fileIndex}`}>{t.filePath(fileIndex + 1)}</label>
+                        <input id={`disc-${index}-path-${fileIndex}`} value={file.path} onChange={event => updateDisc(index, { files: disc.files.map((item, i) => i === fileIndex ? { ...item, path: event.target.value } : item) })} />
+                      </div>
+                    </div>
+                    <button type="button" className="btn-icon danger" title={t.removeFile(fileIndex + 1, index + 1)} onClick={() => updateDisc(index, { files: disc.files.filter((_, i) => i !== fileIndex) })}>✕</button>
+                  </div>)}
+                </div>
+                <button type="button" className="secondary btn-small" onClick={() => updateDisc(index, { files: [...disc.files, { source: '', path: '' }] })}>{t.addFile(index + 1)}</button>
+              </fieldset>)}
+              <div className="game-form-actions">
+                <button type="button" className="secondary btn-small" onClick={() => setDraft({ ...draft, discs: [...draft.discs, blankDisc()] })}>{t.addDisc}</button>
+              </div>
+              <div>
+                <label htmlFor="game-playlist">{draft.discs.length > 1 ? t.playlistRequired : t.playlistOptional}</label>
+                <input id="game-playlist" value={draft.playlist} onChange={event => setDraft({ ...draft, playlist: event.target.value })} />
+              </div>
+              {gameError && <p className="json-error" role="alert">{gameError}</p>}
+              <div className="submit-row">
+                <button className="primary" type="submit" disabled={editing && !dirty}>{editing ? t.save : t.addGame}</button>
+                {editing && <button type="button" className="btn-small danger" onClick={deleteGame}>{t.deleteGame}</button>}
+              </div>
             </fieldset>
           </form>
-          {platformError && <p className="json-error" role="alert">{message(platformError, t)}</p>}
-          {addedPlatform && <p role="status">{t.platformAdded(addedPlatform)}</p>}
-        </section>}
+        </section>
+      </section>}
 
-        {activeTab === 'json' && <section className="panel json-panel">
-          <div className="json-heading">
-            <div>
-              <p className="eyebrow">{t.advanced}</p>
-              <h2>{t.fullJson}</h2>
-              <p className="muted">{t.jsonHint}</p>
+      {activeTab === 'platforms' && <section className="panel platform-panel" aria-labelledby="platform-heading">
+        <div className="panel-heading"><div><p className="eyebrow">{t.catalog}</p><h2 id="platform-heading">{t.platforms}</h2></div><span className="count">{platforms.length}</span></div>
+        {platforms.length === 0 ? <p className="muted">{t.noPlatforms}</p> :
+          <ul className="platform-list">{platforms.map(item => <li key={item.id}>
+            <strong>{item.name}</strong> <span>{item.id} · {item.libretro_name} · {t.publishedGames(item.games)}</span>{' '}
+            <button type="button" className="btn-small danger" disabled={busy} onClick={() => deletePlatform(item.id)}>{t.deletePlatform}</button>
+          </li>)}</ul>}
+        <form className="platform-form" onSubmit={submitPlatform}>
+          <fieldset disabled={busy}>
+            <legend>{t.addPlatform}</legend>
+            <div className="platform-modes">
+              <label><input type="radio" name="platform-mode" value="preset" checked={platformMode === 'preset'} onChange={() => { setPlatformMode('preset'); setPlatformError(''); }} /> {t.fromList}</label>
+              <label><input type="radio" name="platform-mode" value="custom" checked={platformMode === 'custom'} onChange={() => { setPlatformMode('custom'); setPlatformError(''); }} /> {t.customPlatform}</label>
             </div>
-            <button type="button" className="secondary btn-small" onClick={formatCurrentJson} disabled={busy || !!parsed.error}>{t.formatJson}</button>
-          </div>
-          <label htmlFor="manifest-json" className="sr-only">{t.fullJson}</label>
-          <textarea id="manifest-json" value={text} onChange={event => { setText(event.target.value); setError(''); setNotice(''); setAddedPlatform(''); setPlatformError(''); }} spellCheck="false" disabled={busy} aria-invalid={!!parsed.error} aria-describedby={parsed.error ? 'json-error' : undefined} />
-          {parsed.error && <p id="json-error" className="json-error" role="alert">{t.invalidJson(parsed.error)}</p>}
-        </section>}
-      </>}
+            {platformMode === 'preset' ? <>
+              <label htmlFor="platform-preset">{t.platformLibretro}</label>
+              <select id="platform-preset" value={preset} onChange={event => setPreset(event.target.value)}>
+                <option value="">{t.choosePlatform}</option>
+                {known.map(item => <option key={item.libretro_name} value={item.libretro_name}>{item.libretro_name}</option>)}
+              </select>
+            </> : <>
+              {[['id', 'ID'], ['name', t.name], ['libretro_name', 'Libretro name']].map(([key, label]) => <div key={key}>
+                <label htmlFor={`platform-${key}`}>{label}</label>
+                <input id={`platform-${key}`} value={customPlatform[key]} onChange={event => setCustomPlatform({ ...customPlatform, [key]: event.target.value })} />
+              </div>)}
+            </>}
+            <button className="primary" type="submit">{t.addPlatform}</button>
+          </fieldset>
+        </form>
+        {platformError && <p className="json-error" role="alert">{message(platformError, t)}</p>}
+        {addedPlatform && <p role="status">{t.platformAdded(addedPlatform)}</p>}
+      </section>}
     </main>
   </div>;
 }

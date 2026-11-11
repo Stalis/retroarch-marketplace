@@ -130,15 +130,15 @@ func TestMaintenanceChecksSources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	original := s.snapshot.fingerprint
-	source := filepath.Join(filepath.Dir(manifest), "source-0-0")
+	original := s.snapshot.revision
+	source := filepath.Join(manifest.Root(), "source-0-0")
 	if err := os.WriteFile(source, []byte("updated source"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.checkSources(); err != nil {
 		t.Fatal(err)
 	}
-	if s.snapshot.fingerprint == original {
+	if s.snapshot.revision == original {
 		t.Fatal("source change not detected")
 	}
 	if entries := cacheEntries(t, packages); len(entries) != 0 {
@@ -147,16 +147,16 @@ func TestMaintenanceChecksSources(t *testing.T) {
 	if err := os.Remove(source); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.checkSources(); err == nil || s.scanErr == nil {
-		t.Fatal("missing source not recorded")
+	if err := s.checkSources(); err != nil || s.scanErr != nil {
+		t.Fatalf("missing source must not fail the scan: %v", err)
 	}
-	if w := request(t, s, http.MethodGet, "/api/games"); w.Code != http.StatusInternalServerError {
-		t.Fatalf("HTTP must still report a missing source: %d", w.Code)
+	if w := request(t, s, http.MethodGet, "/api/games"); w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != "[]" {
+		t.Fatalf("a missing source must make the game unavailable: %d %s", w.Code, w.Body.String())
 	}
 	if err := os.WriteFile(source, []byte("restored"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.checkSources(); err != nil || s.scanErr != nil {
+	if err := s.checkSources(); err != nil || s.snapshot.byID["example"].id == "" {
 		t.Fatalf("recovery failed: %v", err)
 	}
 }
@@ -167,8 +167,8 @@ func TestMaintenancePeriodicAndCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	original := s.snapshot.fingerprint
-	if err := os.WriteFile(filepath.Join(filepath.Dir(manifest), "source-0-0"), []byte("changed source"), 0600); err != nil {
+	original := s.snapshot.revision
+	if err := os.WriteFile(filepath.Join(manifest.Root(), "source-0-0"), []byte("changed source"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	dir := filepath.Join(packages, ".cache")
@@ -195,7 +195,7 @@ func TestMaintenancePeriodicAndCancellation(t *testing.T) {
 	defer tick.Stop()
 	for {
 		s.mu.Lock()
-		changed := s.snapshot.fingerprint != original
+		changed := s.snapshot.revision != original
 		s.mu.Unlock()
 		_, statErr := os.Stat(old)
 		if changed && os.IsNotExist(statErr) {
@@ -210,32 +210,32 @@ func TestMaintenancePeriodicAndCancellation(t *testing.T) {
 	if entries := cacheEntries(t, packages); len(entries) != 0 {
 		t.Fatalf("scan created archives: %v", entries)
 	}
-	source := filepath.Join(filepath.Dir(manifest), "source-0-0")
+	source := filepath.Join(manifest.Root(), "source-0-0")
 	if err := os.Remove(source); err != nil {
 		t.Fatal(err)
 	}
-	waitScanError := func(wantError bool) {
+	waitListed := func(want bool) {
 		t.Helper()
 		timeout := time.After(3 * time.Second)
 		for {
 			s.mu.Lock()
-			hasError := s.scanErr != nil
+			_, listed := s.snapshot.byID["example"]
 			s.mu.Unlock()
-			if hasError == wantError {
+			if listed == want {
 				return
 			}
 			select {
 			case <-timeout:
-				t.Fatalf("periodic scan error state did not become %v", wantError)
+				t.Fatalf("periodic scan did not make the game listed=%v", want)
 			case <-tick.C:
 			}
 		}
 	}
-	waitScanError(true)
+	waitListed(false)
 	if err := os.WriteFile(source, []byte("restored source"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	waitScanError(false)
+	waitListed(true)
 	cancel()
 	select {
 	case <-done:
@@ -371,7 +371,7 @@ func TestConcurrentArchiveHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ready, err := s.archive(snapshot.fingerprint, snapshot.packages["/api/packages/third.zip"])
+	ready, err := s.archive(snapshot.packages["/api/packages/third.zip"])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -540,7 +540,7 @@ func TestArchiveFailureWakesWaitersAndRetries(t *testing.T) {
 			}
 			call := func() <-chan result {
 				ch := make(chan result, 1)
-				go func() { p, e := s.archive(snapshot.fingerprint, item); ch <- result{p, e} }()
+				go func() { p, e := s.archive(item); ch <- result{p, e} }()
 				return ch
 			}
 			first := call()
@@ -554,11 +554,10 @@ func TestArchiveFailureWakesWaitersAndRetries(t *testing.T) {
 			second := call()
 			waitArchiveLeases(t, s, path, 2)
 			if change {
-				data, err := os.ReadFile(manifest)
-				if err != nil {
+				if err := os.WriteFile(filepath.Join(manifest.Root(), "source-0-0"), []byte("changed"), 0600); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.WriteFile(manifest, append(data, ' '), 0600); err != nil {
+				if err := s.store.Refresh(context.Background()); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -583,7 +582,7 @@ func TestArchiveFailureWakesWaitersAndRetries(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			p, err := s.archive(current.fingerprint, current.packages["/api/packages/example.zip"])
+			p, err := s.archive(current.packages["/api/packages/example.zip"])
 			if err != nil {
 				t.Fatalf("retry: %v", err)
 			}

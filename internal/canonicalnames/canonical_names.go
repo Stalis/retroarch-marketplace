@@ -13,6 +13,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"retroarch-marketplace/internal/store"
 )
 
 const maxBoxartIndex = 8 << 20
@@ -23,11 +25,85 @@ func NewClient() *http.Client {
 	return &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
 
-func Lookup(ctx context.Context, client *http.Client, platform, query string) ([]string, error) {
-	query = strings.TrimSpace(query)
-	if strings.TrimSpace(platform) == "" || query == "" || platform == "." || platform == ".." || strings.ContainsAny(platform, "/\\:") || strings.IndexFunc(platform, unicode.IsControl) >= 0 {
+// TTL is how long a cached BoxArt listing is served before it is refetched.
+const TTL = 7 * 24 * time.Hour
+
+func validPlatform(platform string) bool {
+	return strings.TrimSpace(platform) != "" && platform != "." && platform != ".." && !strings.ContainsAny(platform, "/\\:") && strings.IndexFunc(platform, unicode.IsControl) < 0
+}
+
+// Finder looks up canonical names in BoxArt listings cached in the store.
+type Finder struct {
+	Store  *store.Store
+	Client *http.Client
+	Now    func() time.Time
+}
+
+func (f Finder) names(ctx context.Context, platform string) ([]string, error) {
+	if !validPlatform(platform) {
 		return nil, ErrInvalidInput
 	}
+	now := f.Now()
+	names, ok, err := f.Store.BoxartNames(ctx, platform, now.Add(-TTL))
+	if err != nil || ok {
+		return names, err
+	}
+	names, err = fetchListing(ctx, f.Client, platform)
+	if err != nil {
+		return nil, err
+	}
+	if err := f.Store.ReplaceBoxart(ctx, platform, names, now); err != nil {
+		return nil, err
+	}
+	return names, nil
+}
+
+// Titles ranks the platform listing against a typed title.
+func (f Finder) Titles(ctx context.Context, platform, query string) ([]string, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, ErrInvalidInput
+	}
+	names, err := f.names(ctx, platform)
+	if err != nil {
+		return nil, err
+	}
+	return Rank(names, query), nil
+}
+
+// File returns listing names matching a ROM filename, best first; empty means no match.
+func (f Finder) File(ctx context.Context, platform, filename string) ([]string, error) {
+	if strings.TrimSpace(filename) == "" {
+		return nil, ErrInvalidInput
+	}
+	names, err := f.names(ctx, platform)
+	if err != nil {
+		return nil, err
+	}
+	if query := trigramQuery(Title(filename)); query != "" {
+		if names, err = f.Store.BoxartCandidates(ctx, platform, query, 200); err != nil {
+			return nil, err
+		}
+	}
+	return MatchFile(filename, names), nil
+}
+
+func trigramQuery(title string) string {
+	seen := map[string]bool{}
+	var terms []string
+	for _, word := range words(strings.ToLower(title)) {
+		r := []rune(word)
+		for i := 0; i+3 <= len(r); i++ {
+			if t := string(r[i : i+3]); !seen[t] {
+				seen[t] = true
+				terms = append(terms, `"`+t+`"`)
+			}
+		}
+	}
+	return strings.Join(terms, " OR ")
+}
+
+func fetchListing(ctx context.Context, client *http.Client, platform string) ([]string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://thumbnails.libretro.com/"+url.PathEscape(platform)+"/Named_Boxarts/", nil)
 	if err != nil {
 		return nil, fmt.Errorf("upstream error: %w", err)
@@ -93,6 +169,11 @@ func Lookup(ctx context.Context, client *http.Client, platform, query string) ([
 	if !htmlOpen || !htmlClose {
 		return nil, errors.New("invalid upstream listing")
 	}
+	return names, nil
+}
+
+// Rank orders names by closeness to query and returns the top 10.
+func Rank(names []string, query string) []string {
 	type candidate struct {
 		name, lower string
 		equal       bool
@@ -125,7 +206,7 @@ func Lookup(ctx context.Context, client *http.Client, platform, query string) ([
 		}
 		result = append(result, item.name)
 	}
-	return result, nil
+	return result
 }
 
 func tokenSet(s string) string {
