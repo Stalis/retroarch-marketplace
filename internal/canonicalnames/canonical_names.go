@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -172,24 +173,36 @@ func fetchListing(ctx context.Context, client *http.Client, platform string) ([]
 	return names, nil
 }
 
-// Rank orders names by closeness to query and returns the top 10.
+var editionSuffix = regexp.MustCompile(`(?:[[:space:]]+(?:\([^()]*\)|\[[^\[\]]*\]))+$`)
+
+// Rank returns up to 10 names, putting exact titles and their editions before fuzzy matches.
 func Rank(names []string, query string) []string {
 	type candidate struct {
 		name, lower string
-		equal       bool
+		priority    int
 		distance    int
 	}
 	q := strings.ToLower(query)
 	qt := tokenSet(q)
+	base := editionSuffix.ReplaceAllString(q, "")
 	ranked := make([]candidate, 0, len(names))
 	for _, name := range names {
 		lower := strings.ToLower(name)
-		ranked = append(ranked, candidate{name, lower, tokenSet(lower) == qt, runeDistance(q, lower)})
+		priority := 3
+		switch {
+		case name == query:
+			priority = 0
+		case editionSuffix.ReplaceAllString(lower, "") == base:
+			priority = 1
+		case tokenSet(lower) == qt:
+			priority = 2
+		}
+		ranked = append(ranked, candidate{name, lower, priority, runeDistance(q, lower)})
 	}
 	sort.Slice(ranked, func(i, j int) bool {
 		a, b := ranked[i], ranked[j]
-		if a.equal != b.equal {
-			return a.equal
+		if a.priority != b.priority {
+			return a.priority < b.priority
 		}
 		if a.distance != b.distance {
 			return a.distance < b.distance
