@@ -151,15 +151,15 @@ The server works out of the box with zero configuration. For advanced setups, yo
 | Scan interval | `-scan-interval` | `RETRO_SCAN_INTERVAL` | `10m` | How often to re-check source files for availability |
 | Cleanup interval| `-cleanup-interval` | `RETRO_CLEANUP_INTERVAL` | `1h` | Cache cleaner frequency |
 | Cache max age | `-cache-max-age` | `RETRO_CACHE_MAX_AGE` | `24h` | How long to keep generated ZIPs |
-| BoxArt title distance | `-boxart-max-distance` | `RETRO_BOXART_MAX_DISTANCE` | No limit | Maximum edits between base titles |
+| BoxArt title distance | `-boxart-max-distance` | `RETRO_BOXART_MAX_DISTANCE` | `2` | Maximum edits between base titles |
 
-To filter fuzzy BoxArt results, add this setting to `config.toml` and restart the server:
+BoxArt search allows up to two edits by default. To change the limit, set `boxart_max_distance` in `config.toml` and restart the server:
 
 ```toml
 boxart_max_distance = 2
 ```
 
-The limit counts character edits. An insertion, deletion, or substitution costs one edit. The comparison ignores case and trailing edition tags such as `(Australia)` or `(En,Fr)`. With a limit of `0`, a search for `DarkStone` can still find `Darkstone (Australia)`. Omit the setting to keep the search unfiltered.
+The limit counts character edits. An insertion, deletion, or substitution costs one edit. The comparison ignores case and trailing edition tags such as `(Australia)` or `(En,Fr)`. With a limit of `0`, a search for `DarkStone` can still find `Darkstone (Australia)`.
 
 The limit applies to the admin BoxArt search and `find-name -q`. Filename matching in `scan` and `find-name -file` uses its own matching rules.
 

@@ -35,7 +35,8 @@ type fileConfig struct {
 // loadConfig parses cmd's flags (define adds subcommand-specific ones) and merges flags > env > TOML > defaults.
 // Callers check positional arguments.
 func loadConfig(cmd string, args []string, lookupEnv func(string) (string, bool), define func(*flag.FlagSet)) (config, *flag.FlagSet, error) {
-	cfg := config{"127.0.0.1:5050", "catalog.db", "packages", 10 * time.Minute, time.Hour, 24 * time.Hour, nil}
+	defaultBoxArtDistance := 2
+	cfg := config{"127.0.0.1:5050", "catalog.db", "packages", 10 * time.Minute, time.Hour, 24 * time.Hour, &defaultBoxArtDistance}
 	flags := flag.NewFlagSet("content-catalog "+cmd, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	configPath := flags.String("config", "config.toml", "configuration file")

@@ -70,8 +70,12 @@ func TestFindName(t *testing.T) {
 		t.Fatalf("code %d: %s", code, &errout)
 	}
 	var names []string
-	if err := json.Unmarshal(out.Bytes(), &names); err != nil || len(names) != 10 || !reflect.DeepEqual(names[:3], []string{"The Game", "Game The", "The Games"}) {
-		t.Fatalf("ranked output: %s (%v)", &out, err)
+	if err := json.Unmarshal(out.Bytes(), &names); err != nil || !reflect.DeepEqual(names, []string{"The Game", "The Games"}) {
+		t.Fatalf("default ranked output: %s (%v)", &out, err)
+	}
+	out.Reset()
+	if code := findName(&out, &errout, append(args, "-boxart-max-distance=20")...); code != 0 || json.Unmarshal(out.Bytes(), &names) != nil || len(names) != 10 || !reflect.DeepEqual(names[:3], []string{"The Game", "Game The", "The Games"}) {
+		t.Fatalf("overridden ranked output: %d %s %s", code, &out, &errout)
 	}
 	out.Reset()
 	if code := findName(&out, &errout, "-platform", "Test System", "-file", "roms/Rock_and_Roll.zip"); code != 0 || json.Unmarshal(out.Bytes(), &names) != nil || !reflect.DeepEqual(names, []string{"Rock & Roll"}) {

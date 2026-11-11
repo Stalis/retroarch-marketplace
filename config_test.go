@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +17,7 @@ func configEnv(values map[string]string) func(string) (string, bool) {
 }
 
 func TestConfigPrecedence(t *testing.T) {
+	distance := 2
 	path := filepath.Join(t.TempDir(), "custom.toml")
 	data := `listen = "file:1"
 database = "file.db"
@@ -36,28 +38,28 @@ cache_max_age = "25h"
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := config{"cli:3", "cli.db", "cli-packages", 13 * time.Minute, 4 * time.Hour, 27 * time.Hour, nil}
-	if got != want {
+	want := config{"cli:3", "cli.db", "cli-packages", 13 * time.Minute, 4 * time.Hour, 27 * time.Hour, &distance}
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v, want %+v", got, want)
 	}
 	got, _, err = loadConfig("serve", nil, env, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want = config{"env:2", "env.db", "env-packages", 12 * time.Minute, 3 * time.Hour, 26 * time.Hour, nil}
-	if got != want {
+	want = config{"env:2", "env.db", "env-packages", 12 * time.Minute, 3 * time.Hour, 26 * time.Hour, &distance}
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v, want %+v", got, want)
 	}
 	got, _, err = loadConfig("serve", []string{"-config", path}, configEnv(nil), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want = config{"file:1", "file.db", "file-packages", 11 * time.Minute, 2 * time.Hour, 25 * time.Hour, nil}
-	if got != want {
+	want = config{"file:1", "file.db", "file-packages", 11 * time.Minute, 2 * time.Hour, 25 * time.Hour, &distance}
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v, want %+v", got, want)
 	}
 	got, _, err = loadConfig("serve", []string{"-config", path}, configEnv(map[string]string{"RETRO_CONFIG": filepath.Join(t.TempDir(), "missing")}), nil)
-	if err != nil || got != want {
+	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("config flag did not override environment: %+v, %v", got, err)
 	}
 }
@@ -96,6 +98,7 @@ func TestConfigErrors(t *testing.T) {
 }
 
 func TestConfigDefaultsAndOptionalFile(t *testing.T) {
+	distance := 2
 	old, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -112,8 +115,8 @@ func TestConfigDefaultsAndOptionalFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := config{"127.0.0.1:5050", "catalog.db", "packages", 10 * time.Minute, time.Hour, 24 * time.Hour, nil}
-	if got != want {
+	want := config{"127.0.0.1:5050", "catalog.db", "packages", 10 * time.Minute, time.Hour, 24 * time.Hour, &distance}
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v, want %+v", got, want)
 	}
 }
