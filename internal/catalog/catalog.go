@@ -282,7 +282,7 @@ func (s *Server) buildArchive(path, fingerprint string, item content.Item) (stri
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == "/api/admin/manifest" || r.URL.Path == "/admin" || strings.HasPrefix(r.URL.Path, "/admin/") {
+	if r.URL.Path == "/api/admin/manifest" || r.URL.Path == "/api/admin/canonical-names" || r.URL.Path == "/admin" || strings.HasPrefix(r.URL.Path, "/admin/") {
 		s.serveAdmin(w, r)
 		return
 	}

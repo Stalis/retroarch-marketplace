@@ -111,6 +111,14 @@ If you have folders with dozens of games (CUE/BIN, ISO, CHD, multi-disc games), 
 
 The assistant will match platforms, verify CUE/M3U references, and validate the manifest against the server.
 
+Look up likely Libretro canonical names without starting the server or changing a manifest:
+
+```sh
+go run ./cmd/find-canonical-name -platform 'Sony - PlayStation' -q "King's Field"
+```
+
+The command returns up to ten ranked candidates as a JSON array. Candidates are suggestions, not verified release identities; check region, edition, revision, and disc information against your files. Agents can also use the [`find-canonical-name` skill](.agents/skills/find-canonical-name/SKILL.md).
+
 ---
 
 ## ⚙️ Configuration
@@ -127,6 +135,8 @@ The server works out of the box with zero configuration. For advanced setups, yo
 | Cache max age | `-cache-max-age` | `RETRO_CACHE_MAX_AGE` | `24h` | How long to keep generated ZIPs |
 
 When the default manifest path is not configured explicitly and the file is absent, the server creates an empty catalog on first startup. Explicitly configured missing manifests remain errors.
+
+The server writes timestamped startup, HTTP request, and maintenance messages to standard error (view container output with `docker logs retroarch-catalog`). Request logs include the method, escaped path, response status, and duration; query parameters and request bodies are not logged. Paths may contain game names.
 
 Check installed version at any time:
 ```sh

@@ -34,7 +34,7 @@ func isSafeAssetChar(c rune) bool {
 		c == '[' || c == ']' ||
 		c == '\'' || c == '.' ||
 		c == '!' || c == ',' ||
-		c == '&' || c == '+'
+		c == '&' || c == '+' || c == ':'
 }
 
 // assetLabels avoids RetroArch's line delimiters and case-insensitive filesystem collisions.

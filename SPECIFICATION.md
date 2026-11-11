@@ -24,7 +24,7 @@ The application catalog handlers (`internal/catalog/customapi.go`) and the Retro
 1. `GET /api/games` returns available games as a JSON array. Search and platform filters combine with AND; pagination is applied after filtering. Each card describes the exact files in its package.
 2. `GET /api/platforms` returns declared platforms, including platforms without available games, in manifest order. For repeated `libretro_name` values, only the first platform is returned.
 3. A card's `download_url` resolves to a lazily generated, cached ZIP containing exactly the card's listed files. Generated playlists are included where applicable. Concurrent requests for one archive share its build; unrelated archives can build or download independently, and active archives are protected from cache cleanup.
-4. The `/assets/cores/` indexes and ZIP endpoints support RetroArch Content Downloader. Asset ZIP contents are nested under a game subdirectory to avoid overwriting sibling games on extraction.
+4. The `/assets/cores/` indexes and ZIP endpoints support RetroArch Content Downloader. Asset ZIP contents are nested under a game subdirectory to avoid overwriting sibling games on extraction. Colons in game names are retained in archive and directory names; clients on filesystems that disallow colons may not be able to extract them.
 5. An invalid manifest must not result in a stale successful catalog response. A valid manifest change or source availability change must be reflected in subsequent catalog requests.
 
 Frontend asset bundle requests share a bounded upstream download; a failed download falls back to the existing placeholder and later requests may retry.
@@ -36,6 +36,7 @@ The HTTP server limits request-header reads to five seconds without imposing a r
 - The web interface is available at `/admin/` and supports English and Russian. It allows users to edit the manifest, add platforms and games, and save changes. The platform list displays the number of currently published games per `libretro_name`.
 - Admin requests require both a loopback client address and a loopback or `localhost` Host. A manifest update additionally requires an `Origin` matching the request scheme and Host, and `Content-Type: application/json`.
 - `GET /api/admin/manifest` returns the raw manifest and its `ETag`. `PUT /api/admin/manifest` requires that revision in `If-Match`; a stale or missing revision returns `412` without replacing the file.
+- `GET /api/admin/canonical-names?platform=<libretro_name>&q=<title>` searches Libretro BoxArt filenames for that platform and returns up to ten ranked names as a JSON array. Invalid parameters return `400`; upstream errors return `502`. Selecting a result changes only the editor's canonical name; it is not persisted until the normal manifest save.
 - Updates are validated before atomic replacement. Newly missing sources require explicit approval: the server returns `422` with a `missing` list; retrying with `?allow_missing=1` marks affected games `defer_missing: true`. Already approved missing sources remain permitted. Invalid input is rejected without replacing the manifest.
 - A successful submission returns `204` and an `ETag` when the server does not modify it; a submission modified to mark missing games deferred returns `200`, the resulting manifest, and its `ETag`.
 

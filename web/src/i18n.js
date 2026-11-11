@@ -1,6 +1,7 @@
 export const messages = {
   ru: {
     title: 'Управление каталогом', subtitle: 'Локальный редактор манифеста', language: 'Язык',
+    lookupCanonical: 'Найти название BoxArt', lookupLoading: 'Поиск названий…', lookupEmpty: 'Совпадения не найдены.', lookupError: 'Не удалось найти названия.',
     noData: 'Нет данных', unsaved: '● Есть изменения', saved: '● Сохранено', reload: 'Загрузить заново', save: 'Сохранить',
     discard: 'Несохранённые изменения будут потеряны. Загрузить манифест с сервера?',
     conflict: 'Манифест изменён вне редактора. Ваши изменения сохранены здесь; скопируйте их, затем загрузите актуальную версию и перенесите изменения вручную.',
@@ -25,6 +26,7 @@ export const messages = {
   },
   en: {
     title: 'Catalog management', subtitle: 'Local manifest editor', language: 'Language',
+    lookupCanonical: 'Find BoxArt name', lookupLoading: 'Searching names…', lookupEmpty: 'No matches found.', lookupError: 'Could not look up names.',
     noData: 'No data', unsaved: '● Unsaved changes', saved: '● Saved', reload: 'Reload', save: 'Save',
     discard: 'Unsaved changes will be lost. Reload the manifest from the server?',
     conflict: 'The manifest was changed outside the editor. Your changes remain here; copy them, then reload the current version and transfer your changes manually.',

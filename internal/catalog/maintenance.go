@@ -20,6 +20,7 @@ func (s *Server) RunMaintenance(ctx context.Context, scanInterval, cleanupInterv
 		<-ctx.Done()
 		return
 	}
+	log.Printf("catalog maintenance started: scan=%s cleanup=%s cache_max_age=%s", scanInterval, cleanupInterval, cacheMaxAge)
 	scan := time.NewTicker(scanInterval)
 	defer scan.Stop()
 	cleanup := time.NewTicker(cleanupInterval)
@@ -27,14 +28,19 @@ func (s *Server) RunMaintenance(ctx context.Context, scanInterval, cleanupInterv
 	for {
 		select {
 		case <-ctx.Done():
+			log.Print("catalog maintenance stopped")
 			return
 		case <-scan.C:
 			if err := s.checkSources(); err != nil {
 				log.Printf("catalog source scan: %v", err)
+			} else {
+				log.Print("catalog source scan completed")
 			}
 		case <-cleanup.C:
 			if err := s.cleanupCache(time.Now(), cacheMaxAge); err != nil {
 				log.Printf("catalog cache cleanup: %v", err)
+			} else {
+				log.Print("catalog cache cleanup completed")
 			}
 		}
 	}

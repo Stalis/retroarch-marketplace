@@ -45,6 +45,7 @@ func TestAssetDownloader(t *testing.T) {
 	const platform = "Sony - PlayStation"
 	const unusualPlatform = "平台; 100% #"
 	ids := []string{"first game", "second game", "游戏; 100% #"}
+	names := []string{"Castlevania: Symphony of the Night", ids[1], ids[2]}
 	platforms := []string{platform, platform, unusualPlatform}
 	contents := [][]zipEntry{
 		{{name: "game.m3u", data: "Disc/game.cue\n"}, {name: "Disc/game.cue", data: "FILE \"game.bin\" BINARY\n"}, {name: "Disc/game.bin", data: "first disc"}},
@@ -55,7 +56,7 @@ func TestAssetDownloader(t *testing.T) {
 	packages := make(map[string][]zipEntry)
 	for i, id := range ids {
 		cards = append(cards, map[string]interface{}{
-			"id": id, "canonical_name": id,
+			"id": id, "canonical_name": names[i],
 			"platform":   map[string]string{"id": "psx", "name": "PlayStation", "libretro_name": platforms[i]},
 			"entrypoint": "game.m3u", "files": []string{"game.m3u", "Disc/game.cue", "Disc/game.bin"}, "download_url": "original.zip",
 		})
@@ -75,7 +76,7 @@ func TestAssetDownloader(t *testing.T) {
 	if !reflect.DeepEqual(categories, wantCategories) {
 		t.Fatalf("categories %q, want %q", categories, wantCategories)
 	}
-	labels := []string{"first game", "second game", assetLabel(ids[2])}
+	labels := []string{names[0], "second game", assetLabel(ids[2])}
 	for i, category := range categories {
 		base := "/assets/cores/" + url.PathEscape(category)
 		redirect := request(t, h, http.MethodGet, base)

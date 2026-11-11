@@ -44,7 +44,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go server.RunMaintenance(ctx, cfg.ScanInterval, cfg.CleanupInterval, cfg.CacheMaxAge)
-	httpServer := &http.Server{Addr: cfg.Listen, Handler: server, ReadHeaderTimeout: 5 * time.Second}
+	httpServer := &http.Server{Addr: cfg.Listen, Handler: loggingHandler(server, log.Default()), ReadHeaderTimeout: 5 * time.Second}
 	err = httpServer.ListenAndServe()
 	cancel()
 	if err != nil {
