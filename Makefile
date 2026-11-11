@@ -1,17 +1,18 @@
 .PHONY: run build build-release test e2e vet fmt admin-install admin-build admin-dev admin-dev-mock admin-mock admin-test
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
-
+# Plain `make` must terminate: CodeQL autobuild runs it, and `run` starts a server.
+.DEFAULT_GOAL := build
 
 run:
-	go run . $(ARGS)
+	go run . serve $(ARGS)
 
 build:
 	mkdir -p bin
-	go build -ldflags="-X main.Version=$(VERSION)" -o bin/catalog-server .
+	go build -ldflags="-X main.Version=$(VERSION)" -o bin/content-catalog .
 
 build-release: admin-build
 	mkdir -p bin
-	go build -tags release -ldflags="-s -w -X main.Version=$(VERSION)" -o bin/catalog-server .
+	go build -tags release -ldflags="-s -w -X main.Version=$(VERSION)" -o bin/content-catalog .
 
 test:
 	go test ./...

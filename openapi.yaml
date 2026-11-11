@@ -61,11 +61,11 @@ paths:
       operationId: listPlatforms
       summary: List platforms
       description: |
-        Every platform declared in the manifest, including those without games, in manifest order.
+        Every platform in the catalog database, including those without games, in insertion order.
         `libretro_name` is the value accepted by the `platform` filter of `/api/games`.
       responses:
         "200":
-          description: Top-level JSON array of platforms with unique `libretro_name`; `[]` when the manifest has none.
+          description: Top-level JSON array of platforms with unique `libretro_name`; `[]` when the database has none.
           content:
             application/json:
               schema:

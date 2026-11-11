@@ -2,10 +2,7 @@ package content
 
 import (
 	"archive/zip"
-	"bytes"
-	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -21,29 +18,24 @@ type Platform struct {
 	LibretroName string `json:"libretro_name"`
 }
 
-type sourceFile struct {
+type File struct {
 	Source string `json:"source"`
 	Path   string `json:"path"`
 }
 
-type disc struct {
-	Entrypoint string       `json:"entrypoint"`
-	Files      []sourceFile `json:"files"`
+type Disc struct {
+	Entrypoint string `json:"entrypoint"`
+	Files      []File `json:"files"`
 }
 
-type content struct {
+// Game is the stored definition of one catalog entry; sources are relative to the database directory.
+type Game struct {
 	ID            string  `json:"id"`
 	CanonicalName string  `json:"canonical_name"`
 	DisplayName   *string `json:"display_name,omitempty"`
 	PlatformID    string  `json:"platform_id"`
-	Discs         []disc  `json:"discs"`
+	Discs         []Disc  `json:"discs"`
 	Playlist      *string `json:"playlist,omitempty"`
-	DeferMissing  bool    `json:"defer_missing,omitempty"`
-}
-
-type manifest struct {
-	Platforms []Platform `json:"platforms"`
-	Contents  []content  `json:"contents"`
 }
 
 type card struct {
@@ -62,19 +54,12 @@ type MissingSource struct {
 }
 
 type Item struct {
-	ID           string
-	Card         json.RawMessage
-	Available    bool
-	DeferMissing bool
-	Missing      []MissingSource
-	card         card
-	files        []sourceFile
-	playlist     string
-}
-
-type Snapshot struct {
-	Items     []Item
-	Platforms []Platform
+	ID          string
+	Card        json.RawMessage
+	Fingerprint string
+	card        card
+	files       []File
+	playlist    string
 }
 
 func safePath(s string, component bool) bool {
@@ -94,207 +79,126 @@ func safePath(s string, component bool) bool {
 	return true
 }
 
+// SafePath reports whether s is a clean relative slash path (a single component when component is true).
+func SafePath(s string, component bool) bool { return safePath(s, component) }
+
 func validText(s string) bool { return s != "" && !strings.ContainsRune(s, 0) }
 
-// scanJSON rejects duplicate object members before decoding the typed manifest.
-func scanJSON(d *json.Decoder) error {
-	t, err := d.Token()
-	if err != nil {
-		return err
+func ValidPlatform(p Platform) error {
+	if !safePath(p.ID, true) || !validText(p.Name) || !safePath(p.LibretroName, true) {
+		return fmt.Errorf("invalid platform %q", p.ID)
 	}
-	if t == nil {
-		return errors.New("null is not allowed in the source manifest")
-	}
-	delim, ok := t.(json.Delim)
-	if !ok {
-		return nil
-	}
-	switch delim {
-	case '{':
-		seen := map[string]bool{}
-		for d.More() {
-			key, err := d.Token()
-			if err != nil {
-				return err
-			}
-			name, ok := key.(string)
-			if !ok || seen[name] {
-				return fmt.Errorf("duplicate or invalid JSON field %v", key)
-			}
-			seen[name] = true
-			if err := scanJSON(d); err != nil {
-				return err
-			}
-		}
-	case '[':
-		for d.More() {
-			if err := scanJSON(d); err != nil {
-				return err
-			}
-		}
-	default:
-		return errors.New("invalid JSON value")
-	}
-	_, err = d.Token()
-	return err
+	return nil
 }
 
-func Load(source string) (*Snapshot, string, error) {
-	snapshot, fingerprint, err := Inspect(source)
-	if err != nil {
-		return nil, "", err
+// Validate checks names, archive paths and the playlist without touching the filesystem.
+func (g Game) Validate() error {
+	if !safePath(g.ID, true) {
+		return fmt.Errorf("invalid or duplicate content id %q", g.ID)
 	}
-	for _, item := range snapshot.Items {
-		if !item.DeferMissing && len(item.Missing) != 0 {
-			return nil, "", fmt.Errorf("source %q: %w", item.Missing[0].Path, os.ErrNotExist)
+	if !validText(g.CanonicalName) || (g.DisplayName != nil && !validText(*g.DisplayName)) {
+		return fmt.Errorf("invalid content name for %q", g.ID)
+	}
+	if len(g.Discs) == 0 || (len(g.Discs) > 1 && g.Playlist == nil) {
+		return fmt.Errorf("content %q requires discs and a playlist for multiple discs", g.ID)
+	}
+	paths := map[string]bool{}
+	addPath := func(name string) bool {
+		if _, exists := paths[name]; exists {
+			return false
 		}
-	}
-	return snapshot, fingerprint, nil
-}
-
-// Inspect validates the manifest and reports missing sources without approving them.
-func Inspect(source string) (*Snapshot, string, error) {
-	source, err := filepath.Abs(source)
-	if err != nil {
-		return nil, "", err
-	}
-	data, err := os.ReadFile(source)
-	if err != nil {
-		return nil, "", err
-	}
-	hash := sha256.New()
-	fmt.Fprintf(hash, "%q:%q;", source, data)
-	d := json.NewDecoder(bytes.NewReader(data))
-	if err := scanJSON(d); err != nil {
-		return nil, "", fmt.Errorf("source JSON: %w", err)
-	}
-	if _, err := d.Token(); err != io.EOF {
-		return nil, "", errors.New("source JSON has trailing data")
-	}
-	var m manifest
-	d = json.NewDecoder(bytes.NewReader(data))
-	d.DisallowUnknownFields()
-	if err := d.Decode(&m); err != nil {
-		return nil, "", fmt.Errorf("source JSON: %w", err)
-	}
-	if m.Platforms == nil || m.Contents == nil {
-		return nil, "", errors.New("platforms and contents must be arrays")
-	}
-	platforms := map[string]Platform{}
-	uniquePlatforms := make([]Platform, 0, len(m.Platforms))
-	seen := map[string]bool{}
-	for _, p := range m.Platforms {
-		if !safePath(p.ID, true) || !validText(p.Name) || !safePath(p.LibretroName, true) {
-			return nil, "", fmt.Errorf("invalid platform %q", p.ID)
-		}
-		if _, exists := platforms[p.ID]; exists {
-			return nil, "", fmt.Errorf("duplicate platform %q", p.ID)
-		}
-		platforms[p.ID] = p
-		if !seen[p.LibretroName] {
-			seen[p.LibretroName] = true
-			uniquePlatforms = append(uniquePlatforms, p)
-		}
-	}
-	ids := map[string]bool{}
-	result := make([]Item, 0, len(m.Contents))
-	for _, c := range m.Contents {
-		if !safePath(c.ID, true) || ids[c.ID] {
-			return nil, "", fmt.Errorf("invalid or duplicate content id %q", c.ID)
-		}
-		ids[c.ID] = true
-		p, ok := platforms[c.PlatformID]
-		if !ok {
-			return nil, "", fmt.Errorf("unknown platform %q", c.PlatformID)
-		}
-		if !validText(c.CanonicalName) || (c.DisplayName != nil && !validText(*c.DisplayName)) {
-			return nil, "", fmt.Errorf("invalid content name for %q", c.ID)
-		}
-		if len(c.Discs) == 0 || (len(c.Discs) > 1 && c.Playlist == nil) {
-			return nil, "", fmt.Errorf("content %q requires discs and a playlist for multiple discs", c.ID)
-		}
-		item := Item{ID: c.ID, Available: true, DeferMissing: c.DeferMissing, card: card{ID: c.ID, CanonicalName: c.CanonicalName, DisplayName: c.DisplayName, Platform: p, DownloadURL: "packages/" + url.PathEscape(c.ID) + ".zip"}}
-		paths := map[string]bool{}
-		addPath := func(name string) bool {
-			if _, exists := paths[name]; exists {
+		for i := 0; i < len(name); i++ {
+			if name[i] == '/' && paths[name[:i]] {
 				return false
 			}
-			for i := 0; i < len(name); i++ {
-				if name[i] == '/' && paths[name[:i]] {
-					return false
-				}
-			}
-			for i := 0; i < len(name); i++ {
-				if name[i] == '/' {
-					paths[name[:i]] = false
-				}
-			}
-			paths[name] = true
-			return true
 		}
-		for _, disc := range c.Discs {
-			if !safePath(disc.Entrypoint, false) || len(disc.Files) == 0 {
-				return nil, "", fmt.Errorf("invalid disc in %q", c.ID)
-			}
-			found := false
-			for _, f := range disc.Files {
-				if !safePath(f.Path, false) || !safePath(f.Source, false) || !addPath(f.Path) {
-					return nil, "", fmt.Errorf("invalid or duplicate file in %q: %q", c.ID, f.Path)
-				}
-				if f.Path == disc.Entrypoint {
-					found = true
-				}
-				sourcePath := f.Source
-				f.Source = filepath.Join(filepath.Dir(source), filepath.FromSlash(sourcePath))
-				info, err := os.Stat(f.Source)
-				if err != nil {
-					if !os.IsNotExist(err) {
-						return nil, "", fmt.Errorf("source %q: %w", f.Source, err)
-					}
-					item.Available = false
-					item.Missing = append(item.Missing, MissingSource{ID: c.ID, Path: sourcePath})
-					fmt.Fprintf(hash, "%q:missing;", f.Source)
-				} else {
-					if !info.Mode().IsRegular() {
-						return nil, "", fmt.Errorf("source %q is not a regular file", f.Source)
-					}
-					fmt.Fprintf(hash, "%q:available:%d:%d;", f.Source, info.Size(), info.ModTime().UnixNano())
-				}
-				item.files = append(item.files, f)
-				item.card.Files = append(item.card.Files, f.Path)
-			}
-			if !found {
-				return nil, "", fmt.Errorf("disc entrypoint %q is not in its files", disc.Entrypoint)
+		for i := 0; i < len(name); i++ {
+			if name[i] == '/' {
+				paths[name[:i]] = false
 			}
 		}
-		item.card.Entrypoint = c.Discs[0].Entrypoint
-		if c.Playlist != nil {
-			if !safePath(*c.Playlist, false) || !addPath(*c.Playlist) {
-				return nil, "", fmt.Errorf("invalid or duplicate playlist %q", *c.Playlist)
-			}
-			var lines []string
-			for _, disc := range c.Discs {
-				rel, err := filepath.Rel(filepath.FromSlash(path.Dir(*c.Playlist)), filepath.FromSlash(disc.Entrypoint))
-				if err != nil {
-					return nil, "", err
-				}
-				rel = filepath.ToSlash(rel)
-				if strings.HasPrefix(rel, "#") || strings.ContainsAny(rel, "\r\n") || path.Clean(path.Join(path.Dir(*c.Playlist), rel)) != disc.Entrypoint {
-					return nil, "", fmt.Errorf("unsafe playlist reference %q", rel)
-				}
-				lines = append(lines, rel)
-			}
-			item.playlist = strings.Join(lines, "\n") + "\n"
-			item.card.Entrypoint = *c.Playlist
-			item.card.Files = append([]string{*c.Playlist}, item.card.Files...)
-		}
-		item.Card, err = json.Marshal(item.card)
-		if err != nil {
-			return nil, "", err
-		}
-		result = append(result, item)
+		paths[name] = true
+		return true
 	}
-	return &Snapshot{Items: result, Platforms: uniquePlatforms}, fmt.Sprintf("%x", hash.Sum(nil)), nil
+	for _, disc := range g.Discs {
+		if !safePath(disc.Entrypoint, false) || len(disc.Files) == 0 {
+			return fmt.Errorf("invalid disc in %q", g.ID)
+		}
+		found := false
+		for _, f := range disc.Files {
+			if !safePath(f.Path, false) || !safePath(f.Source, false) || !addPath(f.Path) {
+				return fmt.Errorf("invalid or duplicate file in %q: %q", g.ID, f.Path)
+			}
+			if f.Path == disc.Entrypoint {
+				found = true
+			}
+		}
+		if !found {
+			return fmt.Errorf("disc entrypoint %q is not in its files", disc.Entrypoint)
+		}
+	}
+	if g.Playlist != nil {
+		if !safePath(*g.Playlist, false) || !addPath(*g.Playlist) {
+			return fmt.Errorf("invalid or duplicate playlist %q", *g.Playlist)
+		}
+		if _, err := playlist(g); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func playlist(g Game) (string, error) {
+	var lines []string
+	for _, disc := range g.Discs {
+		rel, err := filepath.Rel(filepath.FromSlash(path.Dir(*g.Playlist)), filepath.FromSlash(disc.Entrypoint))
+		if err != nil {
+			return "", err
+		}
+		rel = filepath.ToSlash(rel)
+		if strings.HasPrefix(rel, "#") || strings.ContainsAny(rel, "\r\n") || path.Clean(path.Join(path.Dir(*g.Playlist), rel)) != disc.Entrypoint {
+			return "", fmt.Errorf("unsafe playlist reference %q", rel)
+		}
+		lines = append(lines, rel)
+	}
+	return strings.Join(lines, "\n") + "\n", nil
+}
+
+// NewItem builds the public card and package plan of a validated game; root anchors relative sources.
+func NewItem(g Game, p Platform, root string) (Item, error) {
+	if err := g.Validate(); err != nil {
+		return Item{}, err
+	}
+	item := Item{ID: g.ID, card: card{ID: g.ID, CanonicalName: g.CanonicalName, DisplayName: g.DisplayName, Platform: p, Entrypoint: g.Discs[0].Entrypoint, DownloadURL: "packages/" + url.PathEscape(g.ID) + ".zip"}}
+	for _, disc := range g.Discs {
+		for _, f := range disc.Files {
+			item.files = append(item.files, File{Source: filepath.Join(root, filepath.FromSlash(f.Source)), Path: f.Path})
+			item.card.Files = append(item.card.Files, f.Path)
+		}
+	}
+	if g.Playlist != nil {
+		var err error
+		if item.playlist, err = playlist(g); err != nil {
+			return Item{}, err
+		}
+		item.card.Entrypoint = *g.Playlist
+		item.card.Files = append([]string{*g.Playlist}, item.card.Files...)
+	}
+	var err error
+	item.Card, err = json.Marshal(item.card)
+	return item, err
+}
+
+// Playlist returns the generated M3U text, empty for single-disc games.
+func (item Item) Playlist() string { return item.playlist }
+
+// Sources returns the absolute source paths in package order.
+func (item Item) Sources() []string {
+	out := make([]string, len(item.files))
+	for i, f := range item.files {
+		out[i] = f.Source
+	}
+	return out
 }
 
 func (item Item) WriteZIP(filename string) (err error) {

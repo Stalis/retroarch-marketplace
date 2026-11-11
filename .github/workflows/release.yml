@@ -161,19 +161,19 @@ jobs:
           mkdir -p release-assets bin
 
           platforms=(
-            "darwin/amd64/catalog-server-${TAG}-darwin-amd64"
-            "darwin/arm64/catalog-server-${TAG}-darwin-arm64"
-            "linux/amd64/catalog-server-${TAG}-linux-amd64"
-            "linux/arm64/catalog-server-${TAG}-linux-arm64"
-            "windows/amd64/catalog-server-${TAG}-windows-amd64"
-            "windows/arm64/catalog-server-${TAG}-windows-arm64"
+            "darwin/amd64/content-catalog-${TAG}-darwin-amd64"
+            "darwin/arm64/content-catalog-${TAG}-darwin-arm64"
+            "linux/amd64/content-catalog-${TAG}-linux-amd64"
+            "linux/arm64/content-catalog-${TAG}-linux-arm64"
+            "windows/amd64/content-catalog-${TAG}-windows-amd64"
+            "windows/arm64/content-catalog-${TAG}-windows-arm64"
           )
 
           for p in "${platforms[@]}"; do
             IFS='/' read -r target_os target_arch archive_name <<< "$p"
-            bin_name="catalog-server"
+            bin_name="content-catalog"
             if [ "$target_os" = "windows" ]; then
-              bin_name="catalog-server.exe"
+              bin_name="content-catalog.exe"
             fi
 
             echo "Building $target_os/$target_arch..."

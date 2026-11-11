@@ -3,6 +3,7 @@
 /content_dir/
 /catalog.json
 /catalog-source.json
+/catalog.db*
 /packages/
 
 # Build outputs and dependencies

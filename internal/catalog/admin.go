@@ -1,12 +1,12 @@
 package catalog
 
 import (
-	"bytes"
-	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"mime"
 	"net"
 	"net/http"
@@ -14,12 +14,14 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"retroarch-marketplace/internal/content"
+	"retroarch-marketplace/internal/store"
 )
 
-const maxManifestSize = 4 << 20
+const maxAdminBody = 1 << 20
 
 func localAdmin(r *http.Request) bool {
 	remote, _, err := net.SplitHostPort(r.RemoteAddr)
@@ -35,92 +37,6 @@ func localAdmin(r *http.Request) bool {
 	return strings.EqualFold(host, "localhost") || (ip != nil && ip.IsLoopback())
 }
 
-func manifestETag(data []byte) string {
-	return fmt.Sprintf("\"%x\"", sha256.Sum256(data))
-}
-
-// markDeferred edits only the effective contents array, preserving other JSON values and key order.
-func markDeferred(candidate []byte, affected map[string]bool) ([]byte, error) {
-	decoder := json.NewDecoder(bytes.NewReader(candidate))
-	if _, err := decoder.Token(); err != nil {
-		return nil, err
-	}
-	start, end := -1, -1
-	var contents []json.RawMessage
-	for decoder.More() {
-		key, err := decoder.Token()
-		if err != nil {
-			return nil, err
-		}
-		var raw json.RawMessage
-		if err := decoder.Decode(&raw); err != nil {
-			return nil, err
-		}
-		if strings.EqualFold(key.(string), "contents") {
-			end = int(decoder.InputOffset())
-			start = end - len(raw)
-			if err := json.Unmarshal(raw, &contents); err != nil {
-				return nil, err
-			}
-		}
-	}
-	if start < 0 {
-		return nil, fmt.Errorf("missing contents")
-	}
-	for i, raw := range contents {
-		var game struct {
-			ID string `json:"id"`
-		}
-		if err := json.Unmarshal(raw, &game); err != nil {
-			return nil, err
-		}
-		if !affected[game.ID] {
-			continue
-		}
-		d := json.NewDecoder(bytes.NewReader(raw))
-		if _, err := d.Token(); err != nil {
-			return nil, err
-		}
-		var edited bytes.Buffer
-		last := 0
-		found := false
-		for d.More() {
-			key, err := d.Token()
-			if err != nil {
-				return nil, err
-			}
-			var value json.RawMessage
-			if err := d.Decode(&value); err != nil {
-				return nil, err
-			}
-			if strings.EqualFold(key.(string), "defer_missing") {
-				valueEnd := int(d.InputOffset())
-				valueStart := valueEnd - len(value)
-				edited.Write(raw[last:valueStart])
-				edited.WriteString("true")
-				last = valueEnd
-				found = true
-			}
-		}
-		if found {
-			edited.Write(raw[last:])
-		} else {
-			edited.Write(raw[:len(raw)-1])
-			edited.WriteString(`,"defer_missing":true}`)
-		}
-		contents[i] = edited.Bytes()
-	}
-	encoded, err := json.Marshal(contents)
-	if err != nil {
-		return nil, err
-	}
-	result := make([]byte, 0, len(candidate)-(end-start)+len(encoded))
-	result = append(result, candidate[:start]...)
-	result = append(result, encoded...)
-	result = append(result, candidate[end:]...)
-	return result, nil
-}
-
 func (s *Server) serveAdmin(w http.ResponseWriter, r *http.Request) {
 	if Version != "" {
 		w.Header().Set("X-Catalog-Version", Version)
@@ -129,20 +45,11 @@ func (s *Server) serveAdmin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "admin access requires a loopback client and host", http.StatusForbidden)
 		return
 	}
-	if r.URL.Path == "/api/admin/canonical-names" {
-		serveCanonicalNames(w, r)
-		return
-	}
-	if r.URL.Path != "/api/admin/manifest" {
+	if !strings.HasPrefix(r.URL.Path, "/api/admin/") {
 		serveAdminFiles(w, r)
 		return
 	}
-	if r.Method != http.MethodGet && r.Method != http.MethodPut {
-		w.Header().Set("Allow", "GET, PUT")
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if r.Method == http.MethodPut {
+	if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodDelete {
 		scheme := "http"
 		if r.TLS != nil {
 			scheme = "https"
@@ -151,140 +58,228 @@ func (s *Server) serveAdmin(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "origin must match the request host", http.StatusForbidden)
 			return
 		}
-		mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-		if err != nil || mediaType != "application/json" {
-			http.Error(w, "Content-Type must be application/json", http.StatusBadRequest)
+		if r.Method != http.MethodDelete {
+			mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+			if err != nil || mediaType != "application/json" {
+				http.Error(w, "Content-Type must be application/json", http.StatusBadRequest)
+				return
+			}
+		}
+	}
+	rest := strings.TrimPrefix(r.URL.EscapedPath(), "/api/admin/")
+	collection, rawID, hasID := strings.Cut(rest, "/")
+	id := ""
+	if hasID {
+		var err error
+		if id, err = url.PathUnescape(rawID); err != nil || !safePath(id, true) {
+			http.NotFound(w, r)
 			return
 		}
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	original, err := os.ReadFile(s.catalogPath)
-	if err != nil {
-		http.Error(w, "cannot read manifest: "+err.Error(), http.StatusInternalServerError)
-		return
+	switch {
+	case collection == "canonical-names" && !hasID:
+		if allow(w, r, http.MethodGet) {
+			s.serveCanonicalNames(w, r)
+		}
+	case collection == "known-platforms" && !hasID:
+		if allow(w, r, http.MethodGet) {
+			writeJSON(w, http.StatusOK, store.KnownPlatforms())
+		}
+	case collection == "platforms" && !hasID:
+		if allow(w, r, http.MethodGet, http.MethodPost) {
+			s.servePlatforms(w, r)
+		}
+	case collection == "platforms":
+		if allow(w, r, http.MethodDelete) {
+			s.adminResult(w, s.store.DeletePlatform(r.Context(), id), http.StatusNoContent)
+		}
+	case collection == "games" && !hasID:
+		if allow(w, r, http.MethodGet, http.MethodPost) {
+			s.serveGames(w, r)
+		}
+	case collection == "games":
+		if allow(w, r, http.MethodGet, http.MethodPut, http.MethodDelete) {
+			s.serveGame(w, r, id)
+		}
+	default:
+		http.NotFound(w, r)
 	}
-	etag := manifestETag(original)
-	if r.Method == http.MethodGet {
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("ETag", etag)
-		_, _ = w.Write(original)
-		return
-	}
-	if r.Header.Get("If-Match") != etag {
-		http.Error(w, "manifest revision does not match", http.StatusPreconditionFailed)
-		return
-	}
-	info, err := os.Lstat(s.catalogPath)
-	if err != nil || !info.Mode().IsRegular() {
-		http.Error(w, "manifest must be a regular file, not a symlink", http.StatusForbidden)
-		return
-	}
-	candidate, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxManifestSize))
-	if err != nil {
-		http.Error(w, "manifest exceeds size limit or cannot be read", http.StatusBadRequest)
-		return
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(s.catalogPath), ".manifest-*")
-	if err != nil {
-		http.Error(w, "cannot create temporary manifest: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	name := tmp.Name()
-	defer os.Remove(name)
-	if err = tmp.Chmod(info.Mode().Perm()); err == nil {
-		_, err = tmp.Write(candidate)
-	}
-	if err == nil {
-		err = tmp.Sync()
-	}
-	if closeErr := tmp.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		http.Error(w, "cannot write temporary manifest: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	snapshot, _, err := content.Inspect(name)
-	if err != nil {
-		http.Error(w, "invalid manifest: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	approved := make(map[content.MissingSource]bool)
-	if previous, _, inspectErr := content.Inspect(s.catalogPath); inspectErr == nil {
-		for _, item := range previous.Items {
-			if item.DeferMissing {
-				for _, missing := range item.Missing {
-					approved[missing] = true
-				}
-			}
+}
+
+func allow(w http.ResponseWriter, r *http.Request, methods ...string) bool {
+	for _, m := range methods {
+		if r.Method == m {
+			return true
 		}
 	}
-	var missing []content.MissingSource
-	affected := make(map[string]bool)
-	for _, item := range snapshot.Items {
-		for _, source := range item.Missing {
-			if !item.DeferMissing || !approved[source] {
-				missing = append(missing, source)
-				affected[item.ID] = true
-			}
-		}
+	w.Header().Set("Allow", strings.Join(methods, ", "))
+	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	return false
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func decodeBody(w http.ResponseWriter, r *http.Request, v any) bool {
+	d := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxAdminBody))
+	d.DisallowUnknownFields()
+	if err := d.Decode(v); err != nil {
+		http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+		return false
 	}
-	changed := len(missing) > 0 && r.URL.Query().Get("allow_missing") == "1"
-	if len(missing) > 0 && !changed {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnprocessableEntity)
-		_ = json.NewEncoder(w).Encode(struct {
+	if _, err := d.Token(); err != io.EOF {
+		http.Error(w, "invalid request body: trailing data", http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
+func etag(revision int64) string { return fmt.Sprintf("\"%d\"", revision) }
+
+// ifMatch parses the required If-Match revision; a missing or malformed header is a failed precondition.
+func ifMatch(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	value := r.Header.Get("If-Match")
+	revision, err := strconv.ParseInt(strings.Trim(value, `"`), 10, 64)
+	if value == "" || err != nil || value != etag(revision) {
+		http.Error(w, "If-Match with the game revision is required", http.StatusPreconditionFailed)
+		return 0, false
+	}
+	return revision, true
+}
+
+// adminResult maps store errors to HTTP statuses and writes status on success.
+func (s *Server) adminResult(w http.ResponseWriter, err error, status int) bool {
+	var missing *store.MissingError
+	switch {
+	case err == nil:
+		s.load() // refresh the public snapshot now; a failure resurfaces on the next request
+		if status != 0 {
+			w.WriteHeader(status)
+		}
+		return true
+	case errors.As(err, &missing):
+		writeJSON(w, http.StatusUnprocessableEntity, struct {
 			Missing []content.MissingSource `json:"missing"`
-		}{missing})
-		return
+		}{missing.Missing})
+	case errors.Is(err, store.ErrNotFound):
+		http.Error(w, err.Error(), http.StatusNotFound)
+	case errors.Is(err, store.ErrExists), errors.Is(err, store.ErrInUse):
+		http.Error(w, err.Error(), http.StatusConflict)
+	case errors.Is(err, store.ErrConflict):
+		http.Error(w, err.Error(), http.StatusPreconditionFailed)
+	case errors.Is(err, store.ErrUnknownPlatform):
+		http.Error(w, err.Error(), http.StatusBadRequest)
+	default:
+		log.Printf("admin: %v", err)
+		http.Error(w, "storage error: "+err.Error(), http.StatusInternalServerError)
 	}
-	if changed {
-		candidate, err = markDeferred(candidate, affected)
-		if err == nil {
-			var updated *os.File
-			updated, err = os.OpenFile(name, os.O_WRONLY|os.O_TRUNC, 0)
-			if err == nil {
-				_, err = updated.Write(candidate)
-				if err == nil {
-					err = updated.Sync()
-				}
-				if closeErr := updated.Close(); err == nil {
-					err = closeErr
-				}
-			}
-		}
+	return false
+}
+
+func (s *Server) servePlatforms(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		platforms, err := s.store.Platforms(r.Context())
 		if err != nil {
-			http.Error(w, "cannot prepare manifest: "+err.Error(), http.StatusInternalServerError)
+			s.adminResult(w, err, 0)
 			return
 		}
-	}
-	if _, _, err = content.Load(name); err != nil {
-		http.Error(w, "invalid manifest: "+err.Error(), http.StatusBadRequest)
+		writeJSON(w, http.StatusOK, platforms)
 		return
 	}
-	currentInfo, err := os.Lstat(s.catalogPath)
-	if err != nil || !currentInfo.Mode().IsRegular() || !os.SameFile(info, currentInfo) {
-		http.Error(w, "manifest changed during update", http.StatusPreconditionFailed)
+	var p content.Platform
+	if !decodeBody(w, r, &p) {
 		return
 	}
-	current, err := os.ReadFile(s.catalogPath)
-	if err != nil || !bytes.Equal(original, current) {
-		http.Error(w, "manifest changed during update", http.StatusPreconditionFailed)
+	if err := content.ValidPlatform(p); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err = os.Rename(name, s.catalogPath); err != nil {
-		http.Error(w, "cannot replace manifest: "+err.Error(), http.StatusInternalServerError)
+	s.adminResult(w, s.store.CreatePlatform(r.Context(), p), http.StatusCreated)
+}
+
+func (s *Server) serveGames(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		var g content.Game
+		if !decodeBody(w, r, &g) {
+			return
+		}
+		if err := g.Validate(); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		revision, err := s.store.CreateGame(r.Context(), g, r.URL.Query().Get("allow_missing") == "1")
+		if err == nil {
+			w.Header().Set("ETag", etag(revision))
+			w.Header().Set("Location", "/api/admin/games/"+url.PathEscape(g.ID))
+		}
+		s.adminResult(w, err, http.StatusCreated)
 		return
 	}
-	w.Header().Set("ETag", manifestETag(candidate))
-	if changed {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(candidate)
+	params := r.URL.Query()
+	f := store.Filter{Query: params.Get("q"), PlatformID: params.Get("platform_id"), Count: 50}
+	for name, dst := range map[string]*int{"skip": &f.Skip, "count": &f.Count} {
+		if v := params.Get(name); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 0 {
+				http.Error(w, "invalid "+name, http.StatusBadRequest)
+				return
+			}
+			*dst = n
+		}
+	}
+	games, err := s.store.Games(r.Context(), f)
+	if err != nil {
+		s.adminResult(w, err, 0)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, games)
+}
+
+func (s *Server) serveGame(w http.ResponseWriter, r *http.Request, id string) {
+	switch r.Method {
+	case http.MethodGet:
+		g, revision, available, missing, err := s.store.Game(r.Context(), id)
+		if err != nil {
+			s.adminResult(w, err, 0)
+			return
+		}
+		w.Header().Set("ETag", etag(revision))
+		writeJSON(w, http.StatusOK, struct {
+			Game      content.Game            `json:"game"`
+			Available bool                    `json:"available"`
+			Missing   []content.MissingSource `json:"missing"`
+		}{g, available, missing})
+	case http.MethodPut:
+		revision, ok := ifMatch(w, r)
+		if !ok {
+			return
+		}
+		var g content.Game
+		if !decodeBody(w, r, &g) {
+			return
+		}
+		if g.ID != id {
+			http.Error(w, "game id must match the URL", http.StatusBadRequest)
+			return
+		}
+		if err := g.Validate(); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		revision, err := s.store.UpdateGame(r.Context(), g, revision, r.URL.Query().Get("allow_missing") == "1")
+		if err == nil {
+			w.Header().Set("ETag", etag(revision))
+		}
+		s.adminResult(w, err, http.StatusNoContent)
+	case http.MethodDelete:
+		revision, ok := ifMatch(w, r)
+		if ok {
+			s.adminResult(w, s.store.DeleteGame(r.Context(), id, revision), http.StatusNoContent)
+		}
+	}
 }
 
 // AdminFS serves admin static assets from an in-memory filesystem when non-nil.

@@ -161,7 +161,7 @@ func (s *Server) serveRetroArch(w http.ResponseWriter, r *http.Request, snapshot
 	if !asset.isIndex && asset.redirect == "" {
 		item := snapshot.packages["/api/packages/"+url.PathEscape(asset.archive)+".zip"]
 		var err error
-		asset.archive, err = s.archive(snapshot.fingerprint, item)
+		asset.archive, err = s.archive(item)
 		if err != nil {
 			http.Error(w, "package unavailable", http.StatusInternalServerError)
 			return

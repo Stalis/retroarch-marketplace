@@ -1,177 +1,116 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { MockBackend, initialMockManifest } from '../mock-backend.js';
+import { MockBackend } from '../mock-backend.js';
 
-function startTestServer() {
+async function withServer(fn) {
   const backend = new MockBackend();
   const server = createServer((req, res) => backend.handle(req, res));
-  return new Promise((resolve) => {
-    server.listen(0, '127.0.0.1', () => {
-      const port = server.address().port;
-      resolve({
-        server,
-        backend,
-        baseUrl: `http://127.0.0.1:${port}`
-      });
-    });
-  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}/api/admin`;
+  try { await fn(base); } finally { server.close(); }
 }
 
-test('mock backend handles GET /api/admin/manifest with ETag', async () => {
-  const { server, baseUrl } = await startTestServer();
-  try {
-    const res = await fetch(`${baseUrl}/api/admin/manifest`);
-    assert.equal(res.status, 200);
-    const etag = res.headers.get('ETag');
-    assert.ok(etag && etag.startsWith('"') && etag.endsWith('"'));
-    const data = await res.json();
-    assert.deepEqual(data.platforms, initialMockManifest.platforms);
-    assert.equal(data.contents.length, initialMockManifest.contents.length);
-  } finally {
-    server.close();
-  }
-});
+const json = { 'Content-Type': 'application/json' };
+const newGame = { id: 'new-game', canonical_name: 'New Game', platform_id: 'snes', discs: [{ entrypoint: 'g.sfc', files: [{ source: 'SNES/missing/g.sfc', path: 'g.sfc' }] }] };
 
-test('mock backend updates manifest on valid PUT with matching ETag', async () => {
-  const { server, baseUrl } = await startTestServer();
-  try {
-    const getRes = await fetch(`${baseUrl}/api/admin/manifest`);
-    const etag = getRes.headers.get('ETag');
-    const manifest = await getRes.json();
+test('lists games with availability, search and paging', () => withServer(async base => {
+  const all = await (await fetch(`${base}/games`)).json();
+  assert.deepEqual(all.map(game => game.id), ['kings-field', 'parasite-eve-ii', 'super-mario-world', 'unreleased-prototype']);
+  assert.equal(all.find(game => game.id === 'unreleased-prototype').available, false);
+  assert.deepEqual((await (await fetch(`${base}/games?q=PARASITE`)).json()).map(game => game.id), ['parasite-eve-ii']);
+  assert.deepEqual((await (await fetch(`${base}/games?skip=1&count=2`)).json()).map(game => game.id), ['parasite-eve-ii', 'super-mario-world']);
+  const known = await (await fetch(`${base}/known-platforms`)).json();
+  assert.equal(known.length, 82);
+}));
 
-    manifest.contents[0].canonical_name = 'Updated Title';
-    const putRes = await fetch(`${baseUrl}/api/admin/manifest`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'If-Match': etag
-      },
-      body: JSON.stringify(manifest)
-    });
-    assert.equal(putRes.status, 204);
-    const newEtag = putRes.headers.get('ETag');
-    assert.ok(newEtag && newEtag !== etag);
+test('GET returns the game with an ETag; stale PUT is rejected with 412', () => withServer(async base => {
+  const response = await fetch(`${base}/games/super-mario-world`);
+  const etag = response.headers.get('ETag');
+  assert.equal(etag, '"1"');
+  const { game, available, missing } = await response.json();
+  assert.equal(available, true);
+  assert.deepEqual(missing, []);
+  const put = (tag, body = game) => fetch(`${base}/games/super-mario-world`, { method: 'PUT', headers: { ...json, ...(tag ? { 'If-Match': tag } : {}) }, body: JSON.stringify(body) });
+  const saved = await put(etag, { ...game, canonical_name: 'Renamed' });
+  assert.equal(saved.status, 204);
+  assert.equal(saved.headers.get('ETag'), '"2"');
+  assert.equal((await put(etag)).status, 412);
+  assert.equal((await put(null)).status, 412);
+  assert.equal((await put('"2"', { ...game, id: 'other' })).status, 400);
+  assert.equal((await (await fetch(`${base}/games/super-mario-world`)).json()).game.canonical_name, 'Renamed');
+}));
 
-    const verifyRes = await fetch(`${baseUrl}/api/admin/manifest`);
-    const verified = await verifyRes.json();
-    assert.equal(verified.contents[0].canonical_name, 'Updated Title');
-  } finally {
-    server.close();
-  }
-});
+test('POST and PUT reject games without discs', () => withServer(async base => {
+  const invalid = { ...newGame };
+  delete invalid.discs;
+  const post = await fetch(`${base}/games`, { method: 'POST', headers: json, body: JSON.stringify(invalid) });
+  assert.equal(post.status, 400);
 
-test('mock backend rejects PUT with stale or missing ETag with 412', async () => {
-  const { server, baseUrl } = await startTestServer();
-  try {
-    const resNoEtag = await fetch(`${baseUrl}/api/admin/manifest`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(initialMockManifest)
-    });
-    assert.equal(resNoEtag.status, 412);
+  const response = await fetch(`${base}/games/super-mario-world`);
+  const { game } = await response.json();
+  delete game.discs;
+  const put = await fetch(`${base}/games/super-mario-world`, {
+    method: 'PUT', headers: { ...json, 'If-Match': response.headers.get('ETag') }, body: JSON.stringify(game),
+  });
+  assert.equal(put.status, 400);
+  assert.ok((await (await fetch(`${base}/games/super-mario-world`)).json()).game.discs);
+}));
 
-    const resWrongEtag = await fetch(`${baseUrl}/api/admin/manifest`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'If-Match': '"wrong-etag"'
-      },
-      body: JSON.stringify(initialMockManifest)
-    });
-    assert.equal(resWrongEtag.status, 412);
-  } finally {
-    server.close();
-  }
-});
+test('POST with a missing source returns 422, then allow_missing=1 stores it unavailable', () => withServer(async base => {
+  const post = query => fetch(`${base}/games${query}`, { method: 'POST', headers: json, body: JSON.stringify(newGame) });
+  const rejected = await post('');
+  assert.equal(rejected.status, 422);
+  assert.deepEqual(await rejected.json(), { missing: [{ id: 'new-game', path: 'SNES/missing/g.sfc' }] });
+  assert.equal((await fetch(`${base}/games/new-game`)).status, 404);
+  const created = await post('?allow_missing=1');
+  assert.equal(created.status, 201);
+  assert.equal(created.headers.get('ETag'), '"1"');
+  assert.equal((await post('?allow_missing=1')).status, 409);
+  const stored = await (await fetch(`${base}/games/new-game`)).json();
+  assert.equal(stored.available, false);
+  const publicGames = await (await fetch(`${base.replace('/admin', '')}/games`)).json();
+  assert.ok(!publicGames.some(game => game.id === 'new-game'));
+}));
 
-test('mock backend simulates 422 for missing files and accepts allow_missing=1', async () => {
-  const { server, baseUrl } = await startTestServer();
-  try {
-    const getRes = await fetch(`${baseUrl}/api/admin/manifest`);
-    const etag = getRes.headers.get('ETag');
-    const manifest = await getRes.json();
+test('DELETE requires the current ETag', () => withServer(async base => {
+  const del = tag => fetch(`${base}/games/kings-field`, { method: 'DELETE', headers: tag ? { 'If-Match': tag } : {} });
+  assert.equal((await del('"9"')).status, 412);
+  assert.equal((await del('"1"')).status, 204);
+  assert.equal((await del('"1"')).status, 404);
+}));
 
-    // Add a game with a simulated missing source
-    manifest.contents.push({
-      id: 'missing-test',
-      canonical_name: 'Missing Test',
-      platform_id: 'playstation',
-      discs: [
-        {
-          entrypoint: 'game.bin',
-          files: [{ source: 'missing/file.bin', path: 'game.bin' }]
-        }
-      ]
-    });
+test('platforms: create, duplicate, delete in use and unused', () => withServer(async base => {
+  const platforms = await (await fetch(`${base}/platforms`)).json();
+  assert.equal(platforms.find(p => p.id === 'playstation').games, 2);
+  const create = () => fetch(`${base}/platforms`, { method: 'POST', headers: json, body: JSON.stringify({ id: 'nes', name: 'NES', libretro_name: 'Nintendo - Nintendo Entertainment System' }) });
+  assert.equal((await create()).status, 201);
+  assert.equal((await create()).status, 409);
+  const inUse = await fetch(`${base}/platforms/playstation`, { method: 'DELETE' });
+  assert.equal(inUse.status, 409);
+  assert.equal(await inUse.text(), 'platform has games');
+  assert.equal((await fetch(`${base}/platforms/nes`, { method: 'DELETE' })).status, 204);
+  assert.equal((await fetch(`${base}/platforms/nes`, { method: 'DELETE' })).status, 404);
+}));
 
-    const putRes = await fetch(`${baseUrl}/api/admin/manifest`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'If-Match': etag
-      },
-      body: JSON.stringify(manifest)
-    });
-    assert.equal(putRes.status, 422);
-    const errorBody = await putRes.json();
-    assert.deepEqual(errorBody, {
-      missing: [{ id: 'missing-test', path: 'missing/file.bin' }]
-    });
+test('platform totals include unavailable games', () => withServer(async base => {
+  const platforms = await (await fetch(`${base}/platforms`)).json();
+  const genesis = platforms.find(platform => platform.id === 'genesis');
+  assert.equal(genesis.games, 0);
+  assert.equal(genesis.total_games, 1);
+  assert.equal((await fetch(`${base}/platforms/genesis`, { method: 'DELETE' })).status, 409);
+}));
 
-    // Save with allow_missing=1
-    const forceRes = await fetch(`${baseUrl}/api/admin/manifest?allow_missing=1`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'If-Match': etag
-      },
-      body: JSON.stringify(manifest)
-    });
-    assert.equal(forceRes.status, 200);
-    const forceBody = await forceRes.json();
-    const savedMissingItem = forceBody.contents.find(c => c.id === 'missing-test');
-    assert.equal(savedMissingItem.defer_missing, true);
-  } finally {
-    server.close();
-  }
-});
-
-test('mock public games include deferred games only when their files are available', async () => {
-  const { server, baseUrl } = await startTestServer();
-  try {
-    const getRes = await fetch(`${baseUrl}/api/admin/manifest`);
-    const manifest = await getRes.json();
-    const deferred = manifest.contents.find(item => item.id === 'unreleased-prototype');
-    deferred.discs.push({
-      entrypoint: 'extra.bin',
-      files: [{ source: 'Genesis/absent/extra.bin', path: 'extra.bin' }]
-    });
-    deferred.discs[0].files[0].source = 'Genesis/proto.bin';
-
-    const save = async (etag) => fetch(`${baseUrl}/api/admin/manifest`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'If-Match': etag },
-      body: JSON.stringify(manifest)
-    });
-    const gameIds = async () => (await (await fetch(`${baseUrl}/api/games`)).json()).map(game => game.id);
-
-    let saved = await save(getRes.headers.get('ETag'));
-    assert.equal(saved.status, 204);
-    assert.ok(!(await gameIds()).includes(deferred.id));
-
-    deferred.discs[1].files[0].source = 'Genesis/extra.bin';
-    saved = await save(saved.headers.get('ETag'));
-    assert.equal(saved.status, 204);
-    assert.ok((await gameIds()).includes(deferred.id));
-
-    deferred.discs[0].files[0].source = 'Genesis/missing/proto.bin';
-    saved = await save(saved.headers.get('ETag'));
-    assert.equal(saved.status, 204);
-    const ids = await gameIds();
-    assert.ok(!ids.includes(deferred.id));
-    assert.ok(ids.includes('kings-field'));
-  } finally {
-    server.close();
-  }
-});
+test('BoxArt fixtures cover matches, no results and unavailable images', () => withServer(async base => {
+  const platform = 'Sony - PlayStation';
+  const lookup = query => fetch(`${base}/canonical-names?${new URLSearchParams({ platform, q: query })}`);
+  const image = name => fetch(`${base}/mock/boxart?${new URLSearchParams({ platform, name })}`);
+  const matches = await (await lookup('Parasite Eve II')).json();
+  assert.ok(matches.includes('Parasite Eve II'));
+  assert.ok(matches.includes('Parasite Eve II (Europe)'));
+  assert.deepEqual(await (await lookup('Unknown game')).json(), []);
+  const cover = await image('Parasite Eve II (Europe)');
+  assert.equal(cover.headers.get('Content-Type'), 'image/png');
+  assert.deepEqual([...new Uint8Array(await cover.arrayBuffer()).slice(0, 4)], [137, 80, 78, 71]);
+  assert.equal((await image('Parasite Eve II (Demo)')).status, 404);
+}));

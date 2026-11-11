@@ -8,11 +8,14 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"retroarch-marketplace/internal/store"
 )
 
 const maxBoxartIndex = 8 << 20
@@ -23,11 +26,69 @@ func NewClient() *http.Client {
 	return &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
 
-func Lookup(ctx context.Context, client *http.Client, platform, query string) ([]string, error) {
-	query = strings.TrimSpace(query)
-	if strings.TrimSpace(platform) == "" || query == "" || platform == "." || platform == ".." || strings.ContainsAny(platform, "/\\:") || strings.IndexFunc(platform, unicode.IsControl) >= 0 {
+// TTL is how long a cached BoxArt listing is served before it is refetched.
+const TTL = 7 * 24 * time.Hour
+
+func validPlatform(platform string) bool {
+	return strings.TrimSpace(platform) != "" && platform != "." && platform != ".." && !strings.ContainsAny(platform, "/\\:") && strings.IndexFunc(platform, unicode.IsControl) < 0
+}
+
+// Finder looks up canonical names in BoxArt listings cached in the store.
+type Finder struct {
+	Store            *store.Store
+	Client           *http.Client
+	Now              func() time.Time
+	MaxTitleDistance *int
+}
+
+func (f Finder) names(ctx context.Context, platform string) ([]string, error) {
+	if !validPlatform(platform) {
 		return nil, ErrInvalidInput
 	}
+	now := f.Now()
+	names, ok, err := f.Store.BoxartNames(ctx, platform, now.Add(-TTL))
+	if err != nil || ok {
+		return names, err
+	}
+	names, err = fetchListing(ctx, f.Client, platform)
+	if err != nil {
+		return nil, err
+	}
+	if err := f.Store.ReplaceBoxart(ctx, platform, names, now); err != nil {
+		return nil, err
+	}
+	return names, nil
+}
+
+// Titles ranks the platform listing against a typed title.
+func (f Finder) Titles(ctx context.Context, platform, query string) ([]string, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, ErrInvalidInput
+	}
+	names, err := f.names(ctx, platform)
+	if err != nil {
+		return nil, err
+	}
+	if f.MaxTitleDistance == nil {
+		return Rank(names, query), nil
+	}
+	return rank(names, query, f.MaxTitleDistance), nil
+}
+
+// File returns listing names matching a ROM filename, best first; empty means no match.
+func (f Finder) File(ctx context.Context, platform, filename string) ([]string, error) {
+	if strings.TrimSpace(filename) == "" {
+		return nil, ErrInvalidInput
+	}
+	names, err := f.names(ctx, platform)
+	if err != nil {
+		return nil, err
+	}
+	return MatchFile(filename, names), nil
+}
+
+func fetchListing(ctx context.Context, client *http.Client, platform string) ([]string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://thumbnails.libretro.com/"+url.PathEscape(platform)+"/Named_Boxarts/", nil)
 	if err != nil {
 		return nil, fmt.Errorf("upstream error: %w", err)
@@ -93,22 +154,47 @@ func Lookup(ctx context.Context, client *http.Client, platform, query string) ([
 	if !htmlOpen || !htmlClose {
 		return nil, errors.New("invalid upstream listing")
 	}
+	return names, nil
+}
+
+var editionSuffix = regexp.MustCompile(`(?:[[:space:]]+(?:\([^()]*\)|\[[^\[\]]*\]))+$`)
+
+// Rank returns up to 10 names, putting exact titles and their editions before fuzzy matches.
+func Rank(names []string, query string) []string {
+	return rank(names, query, nil)
+}
+
+func rank(names []string, query string, maxDistance *int) []string {
 	type candidate struct {
 		name, lower string
-		equal       bool
+		priority    int
 		distance    int
 	}
 	q := strings.ToLower(query)
 	qt := tokenSet(q)
+	base := baseTitle(q)
 	ranked := make([]candidate, 0, len(names))
 	for _, name := range names {
 		lower := strings.ToLower(name)
-		ranked = append(ranked, candidate{name, lower, tokenSet(lower) == qt, runeDistance(q, lower)})
+		title := baseTitle(lower)
+		if maxDistance != nil && runeDistance(base, title) > *maxDistance {
+			continue
+		}
+		priority := 3
+		switch {
+		case name == query:
+			priority = 0
+		case title == base:
+			priority = 1
+		case tokenSet(lower) == qt:
+			priority = 2
+		}
+		ranked = append(ranked, candidate{name, lower, priority, runeDistance(q, lower)})
 	}
 	sort.Slice(ranked, func(i, j int) bool {
 		a, b := ranked[i], ranked[j]
-		if a.equal != b.equal {
-			return a.equal
+		if a.priority != b.priority {
+			return a.priority < b.priority
 		}
 		if a.distance != b.distance {
 			return a.distance < b.distance
@@ -125,7 +211,15 @@ func Lookup(ctx context.Context, client *http.Client, platform, query string) ([
 		}
 		result = append(result, item.name)
 	}
-	return result, nil
+	return result
+}
+
+func baseTitle(lower string) string {
+	base := editionSuffix.ReplaceAllString(lower, "")
+	if base == "" {
+		return lower
+	}
+	return base
 }
 
 func tokenSet(s string) string {
