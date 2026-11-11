@@ -1,12 +1,12 @@
 name: CI
 
+# Pull requests only: a branch push with an open PR would otherwise run the same job twice.
+# main is tested by the release workflow; run manually for a branch without a PR.
 on:
-  push:
-    branches-ignore:
-      - main
   pull_request:
     branches:
       - main
+  workflow_dispatch:
 
 jobs:
   test:
