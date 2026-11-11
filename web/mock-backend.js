@@ -31,6 +31,17 @@ const missingSources = game => game.discs.flatMap(d => d.files)
 
 const fold = value => (value || '').toLowerCase();
 
+const covers = new Map([
+  ['Sony - PlayStation', new Map([
+    ["King's Field", 'blue'], ["King's Field (Japan)", 'gold'],
+    ['Parasite Eve II', 'gold'], ['Parasite Eve II (Europe)', 'blue'], ['Parasite Eve II (USA)', 'green'],
+    ['Parasite Eve II (Demo)', null],
+  ])],
+  ['Nintendo - Super Nintendo Entertainment System', new Map([
+    ['Super Mario World', 'green'], ['Super Mario World (USA)', 'blue'],
+  ])],
+]);
+
 export class MockBackend {
   constructor(initialData = initialMockData) {
     this.initialData = initialData;
@@ -58,7 +69,7 @@ export class MockBackend {
     const url = new URL(req.url, 'http://127.0.0.1');
     const path = url.pathname;
     const send = (status, body, headers = {}) => {
-      const json = body !== undefined && typeof body !== 'string';
+      const json = body !== undefined && typeof body !== 'string' && !Buffer.isBuffer(body);
       res.writeHead(status, { 'Content-Type': json ? 'application/json' : 'text/plain; charset=utf-8', 'X-Catalog-Version': '2.0.0-mock', 'Cache-Control': 'no-store', ...headers });
       res.end(json ? JSON.stringify(body) : body);
     };
@@ -73,9 +84,26 @@ export class MockBackend {
     if (path === '/api/games' && method === 'GET') return send(200, this.publicGames());
     if (path === '/api/platforms' && method === 'GET') return send(200, this.platforms);
     if (path === '/api/admin/known-platforms' && method === 'GET') return send(200, knownPlatforms);
+    if (path === '/api/admin/canonical-names' && method === 'GET') {
+      const platform = url.searchParams.get('platform');
+      const query = fold(url.searchParams.get('q')).trim();
+      if (!platform || !query) return send(400, 'invalid platform or query');
+      const candidates = [...(covers.get(platform)?.keys() ?? [])];
+      return send(200, candidates.filter(name => fold(name).includes(query) || query.includes(fold(name))));
+    }
+    if (path === '/api/admin/mock/boxart' && method === 'GET') {
+      const fixture = covers.get(url.searchParams.get('platform'))?.get(url.searchParams.get('name'));
+      if (!fixture) return send(404, 'cover not found');
+      const image = readFileSync(new URL(`./mock-assets/${fixture}.png`, import.meta.url));
+      return send(200, image, { 'Content-Type': 'image/png' });
+    }
+
 
     if (path === '/api/admin/platforms') {
-      if (method === 'GET') return send(200, this.platforms.map(p => ({ ...p, games: this.games.filter(({ game }) => game.platform_id === p.id && missingSources(game).length === 0).length })));
+      if (method === 'GET') return send(200, this.platforms.map(platform => {
+        const games = this.games.filter(({ game }) => game.platform_id === platform.id);
+        return { ...platform, total_games: games.length, games: games.filter(({ game }) => !missingSources(game).length).length };
+      }));
       if (method !== 'POST') return send(405, 'method not allowed', { Allow: 'GET, POST' });
       const platform = await readBody();
       if (!platform?.id || !platform.name || !platform.libretro_name) return send(400, 'invalid platform');
@@ -115,9 +143,9 @@ export class MockBackend {
       }
       if (method !== 'POST') return send(405, 'method not allowed', { Allow: 'GET, POST' });
       const game = await readBody();
+      if (game && this.games.some(entry => entry.game.id === game.id)) return send(409, 'game exists');
       const failure = check(game);
       if (failure) return send(...failure);
-      if (this.games.some(entry => entry.game.id === game.id)) return send(409, 'game exists');
       this.games.push({ game, revision: 1 });
       return send(201, '', { ETag: '"1"', Location: `/api/admin/games/${encodeURIComponent(game.id)}` });
     }

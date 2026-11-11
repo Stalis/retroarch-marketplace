@@ -76,3 +76,25 @@ test('platforms: create, duplicate, delete in use and unused', () => withServer(
   assert.equal((await fetch(`${base}/platforms/nes`, { method: 'DELETE' })).status, 204);
   assert.equal((await fetch(`${base}/platforms/nes`, { method: 'DELETE' })).status, 404);
 }));
+
+test('platform totals include unavailable games', () => withServer(async base => {
+  const platforms = await (await fetch(`${base}/platforms`)).json();
+  const genesis = platforms.find(platform => platform.id === 'genesis');
+  assert.equal(genesis.games, 0);
+  assert.equal(genesis.total_games, 1);
+  assert.equal((await fetch(`${base}/platforms/genesis`, { method: 'DELETE' })).status, 409);
+}));
+
+test('BoxArt fixtures cover matches, no results and unavailable images', () => withServer(async base => {
+  const platform = 'Sony - PlayStation';
+  const lookup = query => fetch(`${base}/canonical-names?${new URLSearchParams({ platform, q: query })}`);
+  const image = name => fetch(`${base}/mock/boxart?${new URLSearchParams({ platform, name })}`);
+  const matches = await (await lookup('Parasite Eve II')).json();
+  assert.ok(matches.includes('Parasite Eve II'));
+  assert.ok(matches.includes('Parasite Eve II (Europe)'));
+  assert.deepEqual(await (await lookup('Unknown game')).json(), []);
+  const cover = await image('Parasite Eve II (Europe)');
+  assert.equal(cover.headers.get('Content-Type'), 'image/png');
+  assert.deepEqual([...new Uint8Array(await cover.arrayBuffer()).slice(0, 4)], [137, 80, 78, 71]);
+  assert.equal((await image('Parasite Eve II (Demo)')).status, 404);
+}));

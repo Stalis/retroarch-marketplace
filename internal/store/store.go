@@ -139,12 +139,14 @@ func (s *Store) Revision(ctx context.Context) (int64, error) {
 
 type PlatformInfo struct {
 	content.Platform
-	Games int `json:"games"`
+	Games      int `json:"games"`
+	TotalGames int `json:"total_games"`
 }
 
 func (s *Store) Platforms(ctx context.Context) ([]PlatformInfo, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT p.id, p.name, p.libretro_name,
-		(SELECT count(*) FROM games g WHERE g.platform_id = p.id AND g.available) FROM platforms p ORDER BY p.rowid`)
+		count(g.id) FILTER (WHERE g.available), count(g.id)
+		FROM platforms p LEFT JOIN games g ON g.platform_id = p.id GROUP BY p.id ORDER BY p.rowid`)
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +154,7 @@ func (s *Store) Platforms(ctx context.Context) ([]PlatformInfo, error) {
 	result := []PlatformInfo{}
 	for rows.Next() {
 		var p PlatformInfo
-		if err := rows.Scan(&p.ID, &p.Name, &p.LibretroName, &p.Games); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.LibretroName, &p.Games, &p.TotalGames); err != nil {
 			return nil, err
 		}
 		result = append(result, p)

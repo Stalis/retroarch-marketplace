@@ -71,7 +71,7 @@ func TestAdminGameCRUD(t *testing.T) {
 	if w.Code != 200 || w.Header().Get("ETag") != `"1"` || !strings.Contains(w.Body.String(), `"available":false`) || !strings.Contains(w.Body.String(), `"path":"g.bin"`) {
 		t.Fatalf("get: %d %s", w.Code, w.Body.String())
 	}
-	if w := adminRequest(h, "GET", "/api/admin/platforms", nil, ""); w.Code != 200 || !strings.Contains(w.Body.String(), `"games":0`) {
+	if w := adminRequest(h, "GET", "/api/admin/platforms", nil, ""); w.Code != 200 || !strings.Contains(w.Body.String(), `"games":0`) || !strings.Contains(w.Body.String(), `"total_games":1`) {
 		t.Fatalf("platforms: %s", w.Body.String())
 	}
 	if w := adminRequest(h, "GET", "/api/admin/games?q=G", nil, ""); w.Code != 200 || !strings.Contains(w.Body.String(), `"id":"g"`) {

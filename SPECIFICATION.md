@@ -40,7 +40,7 @@ The HTTP server limits request-header reads to five seconds without imposing a r
   | Method & path | Behavior |
   |---|---|
   | `GET /api/admin/known-platforms` | Built-in Libretro platform presets |
-  | `GET /api/admin/platforms` | Platforms with their published `games` count |
+  | `GET /api/admin/platforms` | Platforms with the available `games` count and `total_games` across all availability states |
   | `POST /api/admin/platforms` | Create a platform: `201`; `409` duplicate ID; `400` invalid |
   | `DELETE /api/admin/platforms/{id}` | `204`; `404`; `409` when the platform has games |
   | `GET /api/admin/games?q=&platform_id=&skip=&count=` | Game summaries (`id`, `canonical_name`, `display_name`, `platform_id`, `available`, `revision`), including unavailable games; `count` defaults to 50 |

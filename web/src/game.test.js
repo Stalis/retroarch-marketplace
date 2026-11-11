@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { validateGame } from './game.js';
+import { gameIssue, quickDisc, suggestedGameID, validateGame } from './game.js';
 
 const game = { id: 'example', canonical_name: 'Example', display_name: '', platform_id: 'ps', playlist: '', discs: [{ entrypoint: 'Disc/game.dat', files: [{ source: 'input/game.dat', path: 'Disc/game.dat' }] }] };
 const multi = { ...game, discs: [...game.discs, { entrypoint: 'Disc2/game.dat', files: [{ source: 'other.dat', path: 'Disc2/game.dat' }] }] };
@@ -49,4 +49,21 @@ test('localizes validation errors', () => {
     assert.equal(validateGame(candidate, 'unsupported'), ru);
     assert.equal(validateGame(candidate), ru);
   }
+});
+
+test('derives archive paths and an editable ID from a single source', () => {
+  const source = 'SNES/Chrono Trigger (USA).sfc';
+  const path = 'Chrono Trigger (USA).sfc';
+  assert.deepEqual(quickDisc(source), { entrypoint: path, files: [{ source, path }] });
+  assert.equal(suggestedGameID('snes', source), 'snes-chrono-trigger-usa');
+  assert.equal(suggestedGameID('', source), '');
+  assert.equal(suggestedGameID('snes', 'SNES/'), '');
+});
+
+test('identifies the control for errors in simple and advanced fields', () => {
+  assert.equal(gameIssue({ ...game, canonical_name: '' }).field, 'game-canonical_name');
+  assert.equal(gameIssue({ ...game, discs: [quickDisc('../unsafe.sfc')] }).field, 'disc-0-source-0');
+  assert.equal(gameIssue(multi).field, 'game-playlist');
+  const nested = { ...game, discs: [{ ...game.discs[0], files: [...game.discs[0].files, { source: 'another.bin', path: 'Disc' }] }] };
+  assert.equal(gameIssue(nested).field, 'disc-0-path-1');
 });
