@@ -16,7 +16,7 @@ import (
 	"retroarch-marketplace/internal/store"
 )
 
-var listingNames = []string{"Tekken 3 (USA)", "Tekken 3 (Europe, Australia)", "Tekken (Europe)", "Final Fantasy VII (USA) (Disc 1)", "Metal Gear Solid (USA) (Disc 1)"}
+var listingNames = []string{"Tekken 3 (USA)", "Tekken 3 (Europe, Australia)", "Tekken (Europe)", "Final Fantasy VII (USA) (Disc 1)", "Metal Gear Solid (USA) (Disc 1)", "Ys I (USA)"}
 
 func TestMatchFile(t *testing.T) {
 	for file, want := range map[string]string{
@@ -24,6 +24,7 @@ func TestMatchFile(t *testing.T) {
 		"final_fantasy_vii_disc1.bin":       "Final Fantasy VII (USA) (Disc 1)",
 		"Metal.Gear.Solid.[SLUS-00594].cue": "Metal Gear Solid (USA) (Disc 1)",
 		"Tekken 3 (E).bin":                  "Tekken 3 (Europe, Australia)",
+		"Ys 1.cue":                          "Ys I (USA)",
 		"Foo Bar.bin":                       "",
 	} {
 		got := MatchFile(file, listingNames)
@@ -49,6 +50,9 @@ func TestTitleAndDisc(t *testing.T) {
 		}
 	}
 	if got := Tokens("Tekken3 III [b] (USA)"); !reflect.DeepEqual(got, map[string]bool{"tekken": true, "3": true}) {
+		t.Errorf("tokens: %v", got)
+	}
+	if got := Tokens("Ys I"); !reflect.DeepEqual(got, map[string]bool{"ys": true, "1": true}) {
 		t.Errorf("tokens: %v", got)
 	}
 }

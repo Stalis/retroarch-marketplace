@@ -13,7 +13,7 @@ import (
 var (
 	discMarker = regexp.MustCompile(`(?i)\s*(?:\((?:disc|disk|cd)\s*(\d+)(?:\s*of\s*\d+)?\)|[ _.-](?:disc|disk|cd)[ _]?(\d+)$)`)
 	tagGroup   = regexp.MustCompile(`\([^)]*\)|\[[^\]]*\]`)
-	roman      = map[string]string{"ii": "2", "iii": "3", "iv": "4", "v": "5", "vi": "6", "vii": "7", "viii": "8", "ix": "9", "x": "10"}
+	roman      = map[string]string{"i": "1", "ii": "2", "iii": "3", "iv": "4", "v": "5", "vi": "6", "vii": "7", "viii": "8", "ix": "9", "x": "10"}
 )
 
 func stem(filename string) string {
