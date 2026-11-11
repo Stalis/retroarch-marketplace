@@ -85,27 +85,7 @@ func (f Finder) File(ctx context.Context, platform, filename string) ([]string, 
 	if err != nil {
 		return nil, err
 	}
-	if query := trigramQuery(Title(filename)); query != "" {
-		if names, err = f.Store.BoxartCandidates(ctx, platform, query, 200); err != nil {
-			return nil, err
-		}
-	}
 	return MatchFile(filename, names), nil
-}
-
-func trigramQuery(title string) string {
-	seen := map[string]bool{}
-	var terms []string
-	for _, word := range words(strings.ToLower(title)) {
-		r := []rune(word)
-		for i := 0; i+3 <= len(r); i++ {
-			if t := string(r[i : i+3]); !seen[t] {
-				seen[t] = true
-				terms = append(terms, `"`+t+`"`)
-			}
-		}
-	}
-	return strings.Join(terms, " OR ")
 }
 
 func fetchListing(ctx context.Context, client *http.Client, platform string) ([]string, error) {

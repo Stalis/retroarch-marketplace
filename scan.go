@@ -109,7 +109,7 @@ func scan(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	defer st.Close()
-	result, err := scanDirectory(context.Background(), st, flags.Arg(0), platformFlag, dryRun, offline, stderr)
+	result, err := scanDirectory(context.Background(), st, cfg.Database, flags.Arg(0), platformFlag, dryRun, offline, stderr)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -123,8 +123,16 @@ func scan(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func scanDirectory(ctx context.Context, st *store.Store, dir, platformFlag string, dryRun, offline bool, stderr io.Writer) (*scanResult, error) {
+func scanDirectory(ctx context.Context, st *store.Store, database, dir, platformFlag string, dryRun, offline bool, stderr io.Writer) (*scanResult, error) {
 	result := &scanResult{Added: []scanAdded{}, Skipped: []scanSkipped{}}
+	database, err := filepath.Abs(database)
+	if err != nil {
+		return nil, err
+	}
+	database, err = filepath.EvalSymlinks(database)
+	if err != nil {
+		return nil, err
+	}
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, err
@@ -216,6 +224,15 @@ func scanDirectory(ctx context.Context, st *store.Store, dir, platformFlag strin
 			return nil
 		}
 		if d.IsDir() || skippedExtensions[strings.ToLower(filepath.Ext(d.Name()))] {
+			return nil
+		}
+		actual := p
+		if d.Type()&os.ModeSymlink != 0 {
+			if resolved, err := filepath.EvalSymlinks(p); err == nil {
+				actual = resolved
+			}
+		}
+		if actual == database || actual == database+"-wal" || actual == database+"-shm" || actual == database+"-journal" {
 			return nil
 		}
 		// Symlinked directories are not descended into; symlinked regular files count.

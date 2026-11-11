@@ -4,6 +4,7 @@ WORKDIR /app/web
 COPY web/package*.json ./
 RUN npm ci
 COPY web/ ./
+COPY internal/store/known-platforms.json /app/internal/store/known-platforms.json
 RUN npm run build
 
 # Stage 2: Build Go Server with embedded Web

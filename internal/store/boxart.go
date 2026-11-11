@@ -35,24 +35,6 @@ func (s *Store) BoxartNames(ctx context.Context, platform string, fresh time.Tim
 	return names, true, rows.Err()
 }
 
-// BoxartCandidates returns cached names of platform matching an FTS5 query, best first.
-func (s *Store) BoxartCandidates(ctx context.Context, platform, ftsQuery string, limit int) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT name FROM boxart_fts WHERE boxart_fts MATCH ? AND platform = ? ORDER BY bm25(boxart_fts) LIMIT ?", ftsQuery, platform, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	names := []string{}
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, err
-		}
-		names = append(names, name)
-	}
-	return names, rows.Err()
-}
-
 func (s *Store) ReplaceBoxart(ctx context.Context, platform string, names []string, now time.Time) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

@@ -117,3 +117,32 @@ func TestFinderCache(t *testing.T) {
 		t.Fatalf("invalid platform: %v", err)
 	}
 }
+
+func TestFinderFileMatchesFullListing(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "catalog.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	now := time.Unix(1_000_000, 0)
+	names := []string{"Ys 3 (USA)", "F1 (USA)"}
+	for i := range 201 {
+		names = append(names, fmt.Sprintf("Alpha Game (Europe) (Edition %03d)", i))
+	}
+	names = append(names, "Alpha Game (USA) (Edition 999)")
+	if err := st.ReplaceBoxart(ctx, "Test System", names, now); err != nil {
+		t.Fatal(err)
+	}
+	f := Finder{Store: st, Now: func() time.Time { return now }}
+	for file, want := range map[string]string{
+		"Ys III.cue":      "Ys 3 (USA)",
+		"F1 (Europe).cue": "F1 (USA)",
+		"Alpha Game.cue":  "Alpha Game (USA) (Edition 999)",
+	} {
+		got, err := f.File(ctx, "Test System", file)
+		if err != nil || len(got) == 0 || got[0] != want {
+			t.Errorf("%s: got %v, %v; want %q first", file, got, err, want)
+		}
+	}
+}

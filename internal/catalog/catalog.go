@@ -200,10 +200,11 @@ func (s *Server) load() (*catalogSnapshot, error) {
 		return nil, fmt.Errorf("catalog: %w", err)
 	}
 	snapshot := &catalogSnapshot{
-		revision: revision,
-		games:    make([]game, 0, len(items)),
-		byID:     make(map[string]game, len(items)),
-		packages: make(map[string]content.Item, len(items)),
+		revision:  revision,
+		games:     make([]game, 0, len(items)),
+		platforms: make([]content.Platform, 0, len(platforms)),
+		byID:      make(map[string]game, len(items)),
+		packages:  make(map[string]content.Item, len(items)),
 	}
 	seen := map[string]bool{}
 	for _, p := range platforms {

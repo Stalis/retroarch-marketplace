@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"modernc.org/sqlite"
@@ -40,15 +41,27 @@ func init() {
 	sqlite.MustRegisterDeterministicScalarFunction("casefold", 1, func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
 		switch v := args[0].(type) {
 		case string:
-			return strings.ToLower(v), nil
+			return fold(v), nil
 		case []byte:
-			return strings.ToLower(string(v)), nil
+			return fold(string(v)), nil
 		case nil:
 			return nil, nil
 		default:
 			return nil, fmt.Errorf("casefold: unsupported %T", v)
 		}
 	})
+}
+
+func fold(s string) string {
+	return strings.Map(func(r rune) rune {
+		min := r
+		for next := unicode.SimpleFold(r); next != r; next = unicode.SimpleFold(next) {
+			if next < min {
+				min = next
+			}
+		}
+		return min
+	}, s)
 }
 
 type Store struct {
@@ -96,7 +109,12 @@ func (s *Store) migrate() error {
 	case version == schemaVersion:
 		return nil
 	}
-	if _, err := tx.Exec(schemaV1); err != nil {
+	if version == 0 {
+		if _, err := tx.Exec(schemaV1); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(schemaV2); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", schemaVersion)); err != nil {
@@ -369,6 +387,22 @@ func loadGames(ctx context.Context, q querier, where string, args ...any) ([]*st
 	return games, rows.Err()
 }
 
+func (s *Store) loadGames(ctx context.Context, where string, args ...any) ([]*stored, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	games, err := loadGames(ctx, tx, where, args...)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return games, nil
+}
+
 // inspect stats every source; err reports unusable sources other than missing ones.
 func (s *Store) inspect(g content.Game, p content.Platform) (available bool, fingerprint string, missing []content.MissingSource, err error) {
 	item, err := content.NewItem(g, p, s.root)
@@ -401,7 +435,7 @@ func (s *Store) inspect(g content.Game, p content.Platform) (available bool, fin
 }
 
 func (s *Store) Game(ctx context.Context, id string) (content.Game, int64, bool, []content.MissingSource, error) {
-	games, err := loadGames(ctx, s.db, "g.id = ?", id)
+	games, err := s.loadGames(ctx, "g.id = ?", id)
 	if err != nil {
 		return content.Game{}, 0, false, nil, err
 	}
@@ -468,8 +502,8 @@ func (s *Store) createGame(ctx context.Context, tx *sql.Tx, g content.Game, allo
 	if err != nil {
 		return err
 	}
-	res, err := tx.ExecContext(ctx, "INSERT INTO games(id, canonical_name, display_name, platform_id, playlist, available, fingerprint) VALUES (?, ?, ?, ?, ?, ?, ?)",
-		g.ID, g.CanonicalName, g.DisplayName, g.PlatformID, g.Playlist, available, fingerprint)
+	res, err := tx.ExecContext(ctx, "INSERT INTO games(id, canonical_name, display_name, platform_id, playlist, available, fingerprint, revision) VALUES (?, ?, ?, ?, ?, ?, ?, coalesce((SELECT revision FROM game_revisions WHERE id = ?), (SELECT value FROM meta WHERE key = 'game_revision_floor')) + 1)",
+		g.ID, g.CanonicalName, g.DisplayName, g.PlatformID, g.Playlist, available, fingerprint, g.ID)
 	if err != nil {
 		return err
 	}
@@ -482,15 +516,31 @@ func (s *Store) createGame(ctx context.Context, tx *sql.Tx, g content.Game, allo
 
 // CreateGame stores a new game and returns its revision.
 func (s *Store) CreateGame(ctx context.Context, g content.Game, allowMissing bool) (int64, error) {
-	return 1, s.write(ctx, func(tx *sql.Tx) error { return s.createGame(ctx, tx, g, allowMissing) })
+	var revision int64
+	err := s.write(ctx, func(tx *sql.Tx) error {
+		if err := s.createGame(ctx, tx, g, allowMissing); err != nil {
+			return err
+		}
+		return tx.QueryRowContext(ctx, "SELECT revision FROM games WHERE id = ?", g.ID).Scan(&revision)
+	})
+	return revision, err
 }
 
 // CreateGames adds absent platforms and then games in one transaction; missing sources are rejected.
 func (s *Store) CreateGames(ctx context.Context, games []content.Game, platforms []content.Platform) error {
 	return s.write(ctx, func(tx *sql.Tx) error {
 		for _, p := range platforms {
-			if err := createPlatform(ctx, tx, p); err != nil && !errors.Is(err, ErrExists) {
-				return err
+			if err := createPlatform(ctx, tx, p); err != nil {
+				if !errors.Is(err, ErrExists) {
+					return err
+				}
+				var name, libretroName string
+				if err := tx.QueryRowContext(ctx, "SELECT name, libretro_name FROM platforms WHERE id = ?", p.ID).Scan(&name, &libretroName); err != nil {
+					return err
+				}
+				if name != p.Name || libretroName != p.LibretroName {
+					return fmt.Errorf("platform %q: conflicting definition: %w", p.ID, ErrExists)
+				}
 			}
 		}
 		for _, g := range games {
@@ -559,6 +609,9 @@ func (s *Store) DeleteGame(ctx context.Context, id string, revision int64) error
 			}
 			return err
 		}
+		if _, err := tx.ExecContext(ctx, "INSERT INTO game_revisions(id, revision) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET revision = excluded.revision", id, revision); err != nil {
+			return err
+		}
 		return nil
 	})
 }
@@ -570,18 +623,20 @@ func (s *Store) HasSource(ctx context.Context, source string) (bool, error) {
 	return found, err
 }
 
+type refreshChange struct {
+	rowid, revision int64
+	id              string
+	available       bool
+	fingerprint     string
+}
+
 // Refresh re-stats every source and records availability and fingerprints that changed.
 func (s *Store) Refresh(ctx context.Context) error {
-	games, err := loadGames(ctx, s.db, "1")
+	games, err := s.loadGames(ctx, "1")
 	if err != nil {
 		return err
 	}
-	type change struct {
-		rowid, revision int64
-		available       bool
-		fingerprint     string
-	}
-	var changes []change
+	var changes []refreshChange
 	for _, g := range games {
 		available, fingerprint, _, err := s.inspect(g.game, g.platform)
 		if err != nil {
@@ -589,9 +644,13 @@ func (s *Store) Refresh(ctx context.Context) error {
 			available, fingerprint = false, ""
 		}
 		if available != g.available || fingerprint != g.fingerprint {
-			changes = append(changes, change{g.rowid, g.revision, available, fingerprint})
+			changes = append(changes, refreshChange{g.rowid, g.revision, g.game.ID, available, fingerprint})
 		}
 	}
+	return s.applyRefresh(ctx, changes)
+}
+
+func (s *Store) applyRefresh(ctx context.Context, changes []refreshChange) error {
 	if len(changes) == 0 {
 		return nil
 	}
@@ -603,7 +662,7 @@ func (s *Store) Refresh(ctx context.Context) error {
 	changed := false
 	for _, c := range changes {
 		// The revision guard skips games edited since they were read; that write already set fresh values.
-		res, err := tx.ExecContext(ctx, "UPDATE games SET available = ?, fingerprint = ? WHERE rowid = ? AND revision = ?", c.available, c.fingerprint, c.rowid, c.revision)
+		res, err := tx.ExecContext(ctx, "UPDATE games SET available = ?, fingerprint = ? WHERE rowid = ? AND revision = ? AND id = ?", c.available, c.fingerprint, c.rowid, c.revision, c.id)
 		if err != nil {
 			return err
 		}
@@ -623,7 +682,7 @@ func (s *Store) Refresh(ctx context.Context) error {
 
 // AvailableItems returns the available games as packages and every platform, both in insertion order.
 func (s *Store) AvailableItems(ctx context.Context) ([]content.Item, []content.Platform, error) {
-	games, err := loadGames(ctx, s.db, "g.available")
+	games, err := s.loadGames(ctx, "g.available")
 	if err != nil {
 		return nil, nil, err
 	}

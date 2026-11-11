@@ -41,6 +41,22 @@ test('GET returns the game with an ETag; stale PUT is rejected with 412', () => 
   assert.equal((await (await fetch(`${base}/games/super-mario-world`)).json()).game.canonical_name, 'Renamed');
 }));
 
+test('POST and PUT reject games without discs', () => withServer(async base => {
+  const invalid = { ...newGame };
+  delete invalid.discs;
+  const post = await fetch(`${base}/games`, { method: 'POST', headers: json, body: JSON.stringify(invalid) });
+  assert.equal(post.status, 400);
+
+  const response = await fetch(`${base}/games/super-mario-world`);
+  const { game } = await response.json();
+  delete game.discs;
+  const put = await fetch(`${base}/games/super-mario-world`, {
+    method: 'PUT', headers: { ...json, 'If-Match': response.headers.get('ETag') }, body: JSON.stringify(game),
+  });
+  assert.equal(put.status, 400);
+  assert.ok((await (await fetch(`${base}/games/super-mario-world`)).json()).game.discs);
+}));
+
 test('POST with a missing source returns 422, then allow_missing=1 stores it unavailable', () => withServer(async base => {
   const post = query => fetch(`${base}/games${query}`, { method: 'POST', headers: json, body: JSON.stringify(newGame) });
   const rejected = await post('');

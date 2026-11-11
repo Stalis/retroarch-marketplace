@@ -97,6 +97,18 @@ func cacheEntries(t *testing.T, packages string) []os.DirEntry {
 	return entries
 }
 
+func TestEmptyPlatforms(t *testing.T) {
+	catalog, packages := fixture(t, "[]", nil)
+	h, err := New(catalog, packages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := request(t, h, http.MethodGet, "/api/platforms")
+	if w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != "[]" {
+		t.Fatalf("response: %d %s", w.Code, w.Body.String())
+	}
+}
+
 func TestCatalogAndSearch(t *testing.T) {
 	second := strings.Replace(card, `"example"`, `"second"`, 1)
 	second = strings.Replace(second, `Étoile Game`, `Another Game`, 1)

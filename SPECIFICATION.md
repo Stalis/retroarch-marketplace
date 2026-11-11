@@ -50,7 +50,7 @@ The HTTP server limits request-header reads to five seconds without imposing a r
   | `DELETE /api/admin/games/{id}` | `If-Match` required; `204`; `412`; `404` |
   | `GET /api/admin/canonical-names?platform=<libretro_name>&q=<title>` | Up to ten ranked BoxArt names as a JSON array; `400` invalid parameters; `502` upstream errors |
 
-- The `ETag` is the quoted game revision. A write with a stale or missing `If-Match` returns `412` without changing the game; the revision is checked before sources.
+- The `ETag` is the quoted game revision. Revisions are not reused when an ID is deleted and recreated. Upgrading a version 1 database invalidates existing game ETags once; editors must reload before saving. A write with a stale or missing `If-Match` returns `412` without changing the game; the revision is checked before sources.
 - Missing sources require explicit approval: without `?allow_missing=1`, the server returns `422` with a JSON `missing` list of `{"id","path"}` and stores nothing. With approval, the game is stored and excluded from the catalog until its sources exist. Non-regular sources and other stat errors are rejected.
 - The admin editor checks the canonical name against the platform's BoxArt listing as it is loaded or typed, and marks a name that is not an exact listing entry as "not in BoxArt" (RetroArch would find no cover art), offering similar names.
 - Selecting a canonical-name candidate changes only the editor's value; it is not persisted until the game is saved.
@@ -67,7 +67,7 @@ The `content-catalog` binary has the subcommands `serve`, `scan`, `find-name`, a
 
 - `serve` runs the HTTP server and background maintenance.
 - `scan [-platform <libretro_name>] [-dry-run] [-offline] <dir>` adds games found under `dir`, which must be inside the database directory (after resolving symlinks).
-  - It skips dotfiles and dot-directories, symlinked directories, and non-game extensions (text, images, saves, configs, databases, playlists, `.dat`, `.log`, and similar).
+  - It skips the catalog database and its SQLite sidecars, dotfiles and dot-directories, symlinked directories, and non-game extensions (text, images, saves, configs, databases, playlists, `.dat`, `.log`, and similar).
   - The platform is `-platform` (which must name a database or built-in platform), or otherwise the first path component relative to the database directory equal to a `libretro_name` of a database or built-in platform. Files without one are skipped with `no platform`. A built-in platform is created only when an added game uses it.
   - A `.cue` and the files named by its `FILE` lines form one disc; a missing or outside reference skips the cue with `cue reference missing: <name>`. Other files are single-file discs.
   - Discs in one directory and platform with the same title and a disc marker (`(Disc N)`, `(Disc N of M)`, `_disc1`, ` CD2`, …) form one game ordered by disc number, with the playlist `<title>.m3u`.

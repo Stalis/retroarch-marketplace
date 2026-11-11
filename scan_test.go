@@ -80,3 +80,35 @@ func TestScan(t *testing.T) {
 		t.Fatalf("stored: %+v %v %v", g, available, err)
 	}
 }
+
+func TestScanExcludesConfiguredDatabase(t *testing.T) {
+	root := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "database-dir")
+	if err := os.Symlink(root, alias); err != nil {
+		t.Fatal(err)
+	}
+	database := filepath.Join(alias, "catalog.sqlite")
+	st, err := store.Open(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	for _, name := range []string{"catalog.sqlite-journal", "other.sqlite", "game.rom"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("content"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, dryRun := range []bool{true, false} {
+		result, err := scanDirectory(context.Background(), st, database, root, "Sony - PlayStation", dryRun, true, &bytes.Buffer{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var files []string
+		for _, added := range result.Added {
+			files = append(files, added.Files...)
+		}
+		if !reflect.DeepEqual(files, []string{"game.rom", "other.sqlite"}) || len(result.Skipped) != 0 {
+			t.Fatalf("dry run %v: %+v", dryRun, result)
+		}
+	}
+}

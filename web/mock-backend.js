@@ -124,6 +124,7 @@ export class MockBackend {
 
     const allowMissing = url.searchParams.get('allow_missing') === '1';
     const check = game => {
+      if (!Array.isArray(game?.discs)) return [400, 'invalid game'];
       const error = game && validateGame(game, 'en');
       if (!game || error) return [400, error || 'invalid game'];
       if (!this.platforms.some(p => p.id === game.platform_id)) return [400, 'unknown platform'];

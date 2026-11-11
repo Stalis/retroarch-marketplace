@@ -1,6 +1,6 @@
 package store
 
-const schemaVersion = 1
+const schemaVersion = 2
 
 const schemaV1 = `
 CREATE TABLE meta(key TEXT PRIMARY KEY, value INTEGER NOT NULL) STRICT;
@@ -26,4 +26,12 @@ CREATE TRIGGER games_au AFTER UPDATE OF canonical_name, display_name ON games BE
 END;
 CREATE TABLE boxart_listings(platform TEXT PRIMARY KEY, fetched_at INTEGER NOT NULL) STRICT;
 CREATE VIRTUAL TABLE boxart_fts USING fts5(title, platform UNINDEXED, name UNINDEXED, tokenize='trigram remove_diacritics 1');
+`
+
+const schemaV2 = `
+CREATE TABLE game_revisions(id TEXT PRIMARY KEY, revision INTEGER NOT NULL) STRICT;
+INSERT INTO meta(key, value)
+  SELECT 'game_revision_floor', max((SELECT value FROM meta WHERE key = 'revision'), coalesce(max(revision), 0)) FROM games;
+UPDATE games SET revision = (SELECT value + 1 FROM meta WHERE key = 'game_revision_floor');
+UPDATE meta SET value = value + 1 WHERE key = 'revision' AND EXISTS (SELECT 1 FROM games);
 `
