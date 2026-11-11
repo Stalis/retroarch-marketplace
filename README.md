@@ -58,17 +58,13 @@ The database is `/data/catalog.db`. To add games from the mounted folder, run `d
 ### Step 2: Add Your Games in the Web Dashboard
 
 1. Open **[http://127.0.0.1:5050/admin/](http://127.0.0.1:5050/admin/)** for a standalone server or Linux host networking, or **[http://127.0.0.1:5051/admin/](http://127.0.0.1:5051/admin/)** when using the Docker bridge tunnel above.
-2. **Add a Platform**: choose a console from the list of 80+ standard Libretro systems (e.g. *Sony - PlayStation*, *Super Nintendo Entertainment System*, *Sega - Mega Drive - Genesis*).
-3. **Add Games**:
-   - Enter game title.
-   - For single-file games (SNES, Genesis, GBA): specify the ROM filename.
-   - For disc games (PlayStation, Saturn): specify the `.cue` entrypoint and associated `.bin` tracks. Multi-disc games can have `.m3u` playlists generated automatically.
-   - Source paths are relative to the folder containing the database.
-4. Click **Save**. Each game is saved separately; if someone else changed it meanwhile, reload it before saving again.
+2. Open **Platforms → Add platform**. Search the Libretro presets or enter a custom platform. The list shows both the total number of games and how many are available.
+3. Open **Games → Add game**. For a single ROM, choose the platform, enter the primary title, and provide the source path relative to the folder containing the database, such as `SNES/game.sfc`. The editor suggests a game ID and uses the ROM filename for both the path inside the ZIP and the entrypoint.
+4. Check **BoxArt** below the title. The editor shows the exact cover when it finds a match, and **Similar editions** lists other covers with their full Libretro titles. Choose **Use title** to apply an edition's title to the draft.
+5. For CUE/BIN or multi-disc games, open **Advanced settings**. Add each disc's files and choose the launch file, such as the `.cue`, as its entrypoint. For multiple discs, enter a playlist path such as `game.m3u`. The server generates the playlist in disc order.
+6. Click **Add game** to create the entry or **Save** to update it. If source files are missing, correct the paths or choose **Save as unavailable**. The game becomes available after a source scan finds the files. If someone else saved a newer version, the editor keeps your draft until you confirm reloading the current entry.
 
-Games saved with missing files are kept and published automatically after the next source scan finds those files. The platform list shows the number of currently published games.
-
-The dashboard warns before discarding an unfinished game draft when reloading or leaving the page.
+Use the header to switch between English and Russian or choose **System**, **Light**, or **Dark**. The browser remembers these preferences.
 
 > 💡 **Tip:** If you have many games, add them all at once with [`content-catalog scan`](#-adding-many-games-with-scan).
 
@@ -136,7 +132,7 @@ Look up likely Libretro canonical names without starting the server:
 ./content-catalog find-name -platform 'Sony - PlayStation' -file 'Tekken3.cue'
 ```
 
-The command returns up to ten ranked candidates as a JSON array. Candidates are suggestions, not verified release identities; check region, edition, revision, and disc information against your files. BoxArt listings are cached in the database for 7 days.
+The command returns up to ten ranked candidates as a JSON array. Title searches (`-q`) put the exact match first, then editions with the same base title, then fuzzy matches. Check region, edition, revision, and disc information against your files before choosing a match. BoxArt listings are cached in the database for 7 days.
 
 AI assistants (Claude, Cursor, Copilot, etc.) can drive this workflow with the project's agent skills: [`build-content-catalog`](.agents/skills/build-content-catalog/SKILL.md) and [`find-canonical-name`](.agents/skills/find-canonical-name/SKILL.md). Example prompt:
 > *"Add my games in `/path/to/my/games` to the catalog using the `build-content-catalog` skill."*
@@ -157,7 +153,15 @@ The server works out of the box with zero configuration. For advanced setups, yo
 | Cache max age | `-cache-max-age` | `RETRO_CACHE_MAX_AGE` | `24h` | How long to keep generated ZIPs |
 | BoxArt title distance | `-boxart-max-distance` | `RETRO_BOXART_MAX_DISTANCE` | No limit | Maximum edits between base titles |
 
-Set `boxart_max_distance = 2` in TOML to allow two insertions, deletions or substitutions in the admin BoxArt search and `find-name -q`. The comparison ignores case and trailing edition tags such as `(Australia)` or `(En,Fr)`. Use `0` to show only editions of the exact base title.
+To filter fuzzy BoxArt results, add this setting to `config.toml` and restart the server:
+
+```toml
+boxart_max_distance = 2
+```
+
+The limit counts character edits. An insertion, deletion, or substitution costs one edit. The comparison ignores case and trailing edition tags such as `(Australia)` or `(En,Fr)`. With a limit of `0`, a search for `DarkStone` can still find `Darkstone (Australia)`. Omit the setting to keep the search unfiltered.
+
+The limit applies to the admin BoxArt search and `find-name -q`. Filename matching in `scan` and `find-name -file` uses its own matching rules.
 
 The database is created on first startup if absent; its parent folder must exist.
 
@@ -191,7 +195,7 @@ make build-release  # Outputs to bin/content-catalog
 # Local development
 make run            # Backend on http://127.0.0.1:5050
 make admin-dev      # Vite frontend dev server with live reload
-make admin-dev-mock # Standalone Vite frontend with mock backend
+make admin-dev-mock # Standalone Vite frontend with demo games and offline BoxArt fixtures
 ```
 
 - Product specification: [SPECIFICATION.md](SPECIFICATION.md).
